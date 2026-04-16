@@ -1,3 +1,5 @@
+from asyncio import events
+from heapq import merge
 import logging
 import edlib
 from typing import List, Callable, Dict, Set, Optional
@@ -155,17 +157,38 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     """
     if not cluster: 
         return None
-    
+    if len(cluster) == 1:
+        sv = cluster[0]
+        has_h1 = "Hap1" in sv.sources
+        has_h2 = "Hap2" in sv.sources
+        
+        if has_h1 and has_h2: 
+            gt = "1|1"
+        elif has_h1: 
+            gt = "1|0"
+        elif has_h2: 
+            gt = "0|1"
+        else: 
+            gt = "./."
+            
+        sv.genotype = gt
+        sv.info["SUPPORT_H1"] = 1 if has_h1 else 0
+        sv.info["SUPPORT_H2"] = 1 if has_h2 else 0
+        return sv
     cluster.sort(key=lambda x: x.sv_len)
     rep = cluster[len(cluster) // 2]
     
     sources = set()
     all_read_names = set()
     h1_cnt, h2_cnt = 0, 0
-    
+    merged_events=set()
+    merged_pvents=set()
     for sv in cluster:
         if hasattr(sv, 'read_names'):
             all_read_names.update(sv.read_names)
+        if "EVENT" in sv.info:
+            merged_events.add(sv.info["EVENT"])
+            merged_pvents.add(sv.info["PEVENT"])
         sources.update(sv.sources)
         if "Hap1" in sv.sources: h1_cnt += 1
         if "Hap2" in sv.sources: h2_cnt += 1
@@ -191,7 +214,10 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     new_sv.genotype = gt
     new_sv.info["SUPPORT_H1"] = h1_cnt
     new_sv.info["SUPPORT_H2"] = h2_cnt
-    
+    if len(merged_events)!=0:
+        # 加上 sorted 可以保证每次输出的顺序一致，不会乱跳
+        new_sv.info["EVENT"] = ",".join(sorted(merged_events))
+        new_sv.info["PEVENT"] = ",".join(sorted(merged_pvents))
     # Retain the longest sequence as the representative REF/ALT for INS
     if rep.type == "INS":
         longest_seq_sv = max(cluster, key=lambda x: len(x.info.get("SEQ", "")))
