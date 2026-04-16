@@ -343,8 +343,8 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                 ("TRA_TYPE", 1, "String", "Translocation type: INTER_CHR (diff chroms) or INTRA_CHR (same chrom dist > limit)"),
                 ("CHR2", 1, "String", "Chromosome for BND/TRA connection"),
                 ("POS2", 1, "Integer", "Position for BND/TRA connection"),
-                ("EVENT", 1, "String", "ID of the primary event associated with this breakend or variant"),
-                ("PEVENT", 1, "String", "Parent event ID for nested sub-variants in complex SVs"),
+                ("EVENT", ".", "String", "ID of the primary event associated with this breakend or variant"),
+                ("PEVENT", ".", "String", "Parent event ID for nested sub-variants in complex SVs"),
                 ("REPLACED_REF_LEN", 1, "Integer", "Length of the reference sequence deleted/replaced by a COMPLEX event"),
                 ("ORPHAN_CLUSTERS", 1, "Integer", "Number of unmapped or orphan read clusters forming the COMPLEX variant"),
                 ("SOURCE_CHR", 1, "String", "Source chromosome of the duplicated or translocated sequence"),
@@ -359,7 +359,8 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                 ("LEFT_DEL", 1, "Integer", "Length of sequence deletion at the left breakpoint of a complex inversion"),
                 ("RIGHT_DEL", 1, "Integer", "Length of sequence deletion at the right breakpoint of a complex inversion"),
                 ("LEFT_INS", 1, "Integer", "Length of sequence insertion at the left breakpoint of a complex inversion"),
-                ("RIGHT_INS", 1, "Integer", "Length of sequence insertion at the right breakpoint of a complex inversion")
+                ("RIGHT_INS", 1, "Integer", "Length of sequence insertion at the right breakpoint of a complex inversion"),
+                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the backbone")
             ]
             info_lines = [f"##INFO=<ID={i_id},Number={i_num},Type={i_type},Description=\"{i_desc}\">\n" 
                           for i_id, i_num, i_type, i_desc in info_defs]

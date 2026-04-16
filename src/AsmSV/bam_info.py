@@ -961,7 +961,8 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
             if len(merged_clusters) >= 2:
                 candidates.append(SVCandidate("COMPLEX", anchor_chr, anchor_pos, max(0, dist_q), read_name, info={
                     "EVENT": event_id, "SUBTYPE": sub_type_str,
-                    "REPLACED_REF_LEN": int(max(0, dist_r)), "ORPHAN_CLUSTERS": len(merged_clusters)
+                    "REPLACED_REF_LEN": int(max(0, dist_r)), "ORPHAN_CLUSTERS": len(merged_clusters),
+                    "BACKBONE_STRAND": anchor_strand
                 }))
 
         # =======================================================
@@ -999,3 +1000,5 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
         candidates.extend(pair_inv_signals(bp_signals, read_name, main_strand))
         
     return candidates
+
+
