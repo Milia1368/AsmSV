@@ -604,18 +604,29 @@ def condense_orphan_blocks(orphans: List[AlignedSegment], anchor_chr: str, ancho
     curr_r_start, curr_r_end = orphans[0].ref_start, orphans[0].ref_end
     curr_q_start, curr_q_end = orphans[0].qs, orphans[0].qe
     curr_blocks = [orphans[0]] 
-    
     def finalize_cluster(c_chr, c_strand, c_r_start, c_r_end, c_q_start, c_q_end, c_blocks):
-        prefix = "Inv" if c_strand != anchor_strand else ""
-        if c_chr != anchor_chr: sv_type = "TRA" 
+        is_inv = (c_strand != anchor_strand)
+        prefix = "Inv" if is_inv else ""
+        
+        if c_chr != anchor_chr: 
+
+            sv_type = "TRA" 
         else:
             dist_to_anchor = min(abs(c_r_start - anchor_pos), abs(c_r_end - anchor_pos))
-            if dist_to_anchor > 1000000: sv_type = "DUP:ISP" 
-            elif (anchor_strand == '+' and c_r_start < anchor_pos) or (anchor_strand == '-' and c_r_start > anchor_pos):
-                sv_type = "DUP:TANDEM"
+
+            if dist_to_anchor > 1000000: 
+                sv_type = "DUP:ISP" 
             else:
-                prefix, sv_type = "", "INV"
-                    
+                is_upstream = (anchor_strand == '+' and c_r_start <= anchor_pos) or \
+                              (anchor_strand == '-' and c_r_start >= anchor_pos)
+                
+                if is_upstream:
+                    sv_type = "DUP:TANDEM"
+                else:
+                    sv_type = "DUP:ISP"
+                if is_inv:
+                    prefix, sv_type = "", "InvDUP" 
+
         return {
             "sv_type": f"{prefix}{sv_type}",       
             "ref_name": c_chr, "strand": c_strand,
@@ -623,7 +634,7 @@ def condense_orphan_blocks(orphans: List[AlignedSegment], anchor_chr: str, ancho
             "q_start": c_q_start, "q_end": c_q_end, "q_len": c_q_end - c_q_start,
             "original_blocks": c_blocks  
         }
-
+    
     for seg in orphans[1:]:
         can_merge = False
         if seg.ref_name == curr_chr and seg.strand == curr_strand:

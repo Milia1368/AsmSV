@@ -140,9 +140,20 @@ def trace_alt_path_with_bnds(parent, blocks, bnds, tol=50):
         else:
             if next_chr == parent["chrom"] and abs(next_pos - parent["end"]) <= tol: break
             break
-            
+    backbone_strand = parent.get("strand", "+")
     for blk in unvisited:
-        blk['is_inv_traversal'] = ('Inv' in blk.get('subtype', '') or blk.get('type') == 'INV')
+        # 判断它的 SUBTYPE 名字里是否带有 INV
+        name_indicates_inv = ('Inv' in blk.get('subtype', '') or blk.get('type') == 'INV')
+        
+        if backbone_strand == '+':
+            # 主干是正链：带有 INV 才是反向游走 (<-)
+            blk['is_inv_traversal'] = name_indicates_inv
+        else:
+            # 【负链魔法】：主干是负链！
+            # 不发生 INV 的正常块，是顺着负链反向游走的 (<-)
+            # 发生了 INV 的块，负负得正，反而变成了正链方向 (->)
+            blk['is_inv_traversal'] = not name_indicates_inv
+            
         ordered_blocks.append(blk)
         
     return ordered_blocks
