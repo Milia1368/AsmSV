@@ -345,6 +345,8 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                 ("POS2", 1, "Integer", "Position for BND/TRA connection"),
                 ("EVENT", ".", "String", "ID of the primary event associated with this breakend or variant"),
                 ("PEVENT", ".", "String", "Parent event ID for nested sub-variants in complex SVs"),
+                ("REPLACED_QUERY_LEN", 1, "Integer", "Length of the query sequence in a COMPLEX event"),
+                ("INV_BACKBONE",0,"Flag","The backbone of the complex structural variant is inverted relative to the absolute reference coordinates."),
                 ("REPLACED_REF_LEN", 1, "Integer", "Length of the reference sequence deleted/replaced by a COMPLEX event"),
                 ("ORPHAN_CLUSTERS", 1, "Integer", "Number of unmapped or orphan read clusters forming the COMPLEX variant"),
                 ("SOURCE_CHR", 1, "String", "Source chromosome of the duplicated or translocated sequence"),

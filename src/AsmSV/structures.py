@@ -51,7 +51,7 @@ class SVCandidate:
         else:
             if self.type in ("BND", "TRA"):
                 self.end = self.pos
-            elif self.type in ("INS", "COMPLEX"):
+            elif self.type in ("INS"):
                 self.end = self.pos + int(self.info.get("REPLACED_REF_LEN", 0))
             else:
                 self.end = self.pos + self.sv_len 

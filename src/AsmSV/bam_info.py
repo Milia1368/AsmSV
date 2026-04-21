@@ -870,9 +870,9 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
         orphans_in_between = chains[idx_L + 1 : idx_R]
         anchor_chr, anchor_strand = bb_left.ref_name, bb_left.strand
         anchor_pos = bb_left.ref_end if anchor_strand == '+' else bb_left.ref_start
+        anchor_end=bb_right.ref_start if anchor_strand == '+' else bb_right.ref_end
         dist_q = bb_right.qs - bb_left.qe
         dist_r = (bb_right.ref_start - bb_left.ref_end) if anchor_strand == '+' else (bb_left.ref_start - bb_right.ref_end)
-            
         # =======================================================
         # Scenario A: Presence of orphans (Complex/Jumping Variations)
         # =======================================================
@@ -890,7 +890,7 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                 sub_type_str += f"-{m['sv_type']}"
                 sub_event_id = f"{event_id}_sub{idx}"
                 blocks = m["original_blocks"]
-
+                sub_info={}
                 # Resolve nested events inside the complex cluster
                 nested_merged_dict = {}
                 for k in range(len(blocks) - 1):
@@ -925,8 +925,7 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                                 existing_cand.info["REPLACED_REF_LEN"] = existing_cand.info.get("REPLACED_REF_LEN", 0) + internal_cand.info["REPLACED_REF_LEN"]
                             
                             existing_cand.info["MERGED_BLOCKS"] = existing_cand.info.get("MERGED_BLOCKS", 1) + 1
-                            existing_cand.info["SUBTYPE"] = "MULTIPLE_DUP:TANDEM" if internal_cand.info.get("SUBTYPE") == "DUP:TANDEM" else "MERGED_INS"
-                                
+                            existing_cand.info["SUBTYPE"] = "MULTIPLE_DUP:TANDEM" if internal_cand.info.get("SUBTYPE") == "DUP:TANDEM" else "MERGED_INS"   
                 candidates.extend(nested_merged_dict.values())
 
                 m_enter_pos = m["ref_start"] if m["strand"] == '+' else m["ref_end"]
@@ -943,7 +942,7 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                         "STRANDS": prev_strand + m["strand"]
                     }))
                 
-                span_type, sub_info = m["sv_type"], {}
+                span_type= m["sv_type"]
                 if span_type == "TRA":
                     span_type, sub_info["SUBTYPE"] = "DUP", "TRA"  
                 elif span_type == "InvTRA":
@@ -970,11 +969,21 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                 }))
                 
             if len(merged_clusters) >= 2:
-                candidates.append(SVCandidate("COMPLEX", anchor_chr, anchor_pos, max(0, dist_q), read_name, info={
-                    "EVENT": event_id, "SUBTYPE": sub_type_str,
-                    "REPLACED_REF_LEN": int(max(0, dist_r)), "ORPHAN_CLUSTERS": len(merged_clusters),
-                    "BACKBONE_STRAND": anchor_strand
-                }))
+                # 判断是否是从右向左遍历（发生坐标倒置）
+                up_down = bool(anchor_pos > anchor_end)
+                strands_str = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
+                cpl_pos = anchor_end if up_down else anchor_pos
+                info_dict = {
+                    "EVENT": event_id, 
+                    "SUBTYPE": sub_type_str,
+                    "REPLACED_QUERY_LEN": int(max(0, dist_q)), 
+                    "ORPHAN_CLUSTERS": len(merged_clusters),
+                    "BACKBONE_STRAND": strands_str
+                }
+
+                if up_down:
+                    info_dict["INV_BACKBONE"] = True
+                candidates.append(SVCandidate("COMPLEX", anchor_chr, cpl_pos, max(0, dist_r), read_name, info=info_dict))
 
         # =======================================================
         # Scenario B: Clean Backbone Transition (Pure INS/DEL/INV)
