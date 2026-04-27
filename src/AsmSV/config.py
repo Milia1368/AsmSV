@@ -21,6 +21,8 @@ class SVConfig:
     MIN_MAPQ = 10                   # Minimum mapping quality score
     MAX_ALLELE_LEN = 5000           # Maximum sequence length to write in the ALT column
     ENABLE_ALLELE = True            # Enable writing explicit allele sequences (instead of symbolic)
+    MIN_CSV_SIZE=400                # Minimum SV size to report ins-del rpl event (bp)
+    MAX_CSV_SIZE=40000              # Maximum SV size to report ins-del rpl event (bp)
    
     # ================= Clustering & Merging Parameters =================
     CLUSTER_POS_TOL = 3             # Breakpoint position distance tolerance for clustering

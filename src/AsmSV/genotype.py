@@ -117,7 +117,47 @@ def _match_bnd_tra_sv(s1: SVCandidate, s2: SVCandidate) -> bool:
         return False
         
     return True
+def _match_csv_sv(s1: SVCandidate, s2: SVCandidate) -> bool:
+    """
+    Matching logic specifically for CSV (Complex Sequence Replacement: INS + DEL).
+    Checks positional boundaries (POS and END) and compares INS_LEN and DEL_LEN components separately.
+    """
+    # 1. 染色体必须相同
+    if s1.chrom != s2.chrom: 
+        return False
+    
+    # 2. 起点位置 (POS) 必须相近
+    if abs(s1.pos - s2.pos) > SVConfig.CLUSTER_POS_TOL:
+        return False
+        
+    # 3. 终点位置 (END) 必须相近
+    # 这非常关键，对于 CSV 来说，END 锚定了 Reference 上被替换序列的物理右边界
+    if abs(s1.end - s2.end) > SVConfig.CLUSTER_POS_TOL:
+        return False
 
+    # 4. 提取独立的插入和缺失长度
+    ins_len1 = int(s1.info.get("INS_LEN", 0))
+    del_len1 = int(s1.info.get("DEL_LEN", 0))
+    
+    ins_len2 = int(s2.info.get("INS_LEN", 0))
+    del_len2 = int(s2.info.get("DEL_LEN", 0))
+
+    diff_ins = abs(ins_len1 - ins_len2)
+    diff_del = abs(del_len1 - del_len2)
+    
+    # 获取容差设定 (这里可以复用 del 的容差，如果没专门配 ins 的容差，就 fallback 回 del_len_tol)
+    ins_tol = SVConfig.CLUSTER_ins_LEN_TOL
+    del_tol = SVConfig.CLUSTER_del_LEN_TOL
+
+    # 5. 核心阈值判断：插入部分和缺失部分的长度差异必须同时满足要求
+    # 额外加入动态比例判断：如果绝对差异略微超出阈值，但差异占比不到该维度的 20%，也可以认为是同一个复杂变异的测序摆动
+    ins_match = (diff_ins <= ins_tol) or (diff_ins <= max(ins_len1, ins_len2) * 0.1)
+    del_match = (diff_del <= del_tol) or (diff_del <= max(del_len1, del_len2) * 0.1)
+
+    if ins_match and del_match:
+        return True
+        
+    return False
 # ==============================================================================
 # Core Clustering Engine
 # ==============================================================================
@@ -252,7 +292,7 @@ def cluster_and_genotype(hap1_svs: List[SVCandidate], hap2_svs: List[SVCandidate
     
     # 2. Segregate unclusterable COMPLEX events
     for sv in raw_svs:
-        if sv.type == "COMPLEX":
+        if sv.type == "COMPLEX" :
             final_results.append(sv)
         else:
             clusterable_buckets[sv.type].append(sv)
@@ -275,6 +315,11 @@ def cluster_and_genotype(hap1_svs: List[SVCandidate], hap2_svs: List[SVCandidate
         if bnd_tra_candidates := clusterable_buckets[sv_type]:
             bnd_tra_candidates.sort(key=lambda x: (x.chrom, x.pos, x.info.get("CHR2", ""), x.info.get("POS2", 0)))
             final_results.extend(_core_cluster_logic(bnd_tra_candidates, _match_bnd_tra_sv))
+    
+    if csv_candidates := clusterable_buckets["CSV"]:
+        csv_candidates.sort(key=common_sort_key)
+        final_results.extend(_core_cluster_logic(csv_candidates, _match_csv_sv))
+
 
     logger.info(f"Genotyping Summary: Input={len(raw_svs)}, Output={len(final_results)}")
     final_results.sort(key=lambda x: (x.chrom, x.pos))

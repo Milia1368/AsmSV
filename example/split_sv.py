@@ -30,7 +30,7 @@ def flatten_for_benchmark(input_vcf, output_vcf):
             # 逻辑 2: 过滤掉宏观包裹事件 (COMPLEX)
             # 评测软件无法理解宏观标签，直接删掉，防止引发假阳性
             # =======================================================
-            if svtype == "COMPLEX":
+            if svtype == "COMPLEX" or svtype=="CSV":
                 continue
                 
             # =======================================================

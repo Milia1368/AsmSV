@@ -857,7 +857,35 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                             base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
                                 
                 return SVCandidate(sv_type, chrom, anchor_pos, sv_len, read_name, info=base_info)
-                
+            else:
+                if abs(dist_r)> SVConfig.MIN_TRA_SIZE:
+                    return None
+                #complex ind-del
+                # 防御性规则 1：必须是正向的空白消耗（严禁重叠，负数说明是DUP或比对异常）
+                if dist_q > 0 and dist_r > 0:
+                    ins_len = int(dist_q)
+                    del_len = int(dist_r)
+                    
+                    # 防御性规则 2：双维度均须显著突破噪音容忍度
+                    if ins_len >= SVConfig.GAP_TOLERANCE and del_len >= SVConfig.GAP_TOLERANCE:
+                        
+                        # 防御性规则 3：作为复杂变异，总变异量门槛应适当提高（例如基础阈值的 1.2 倍）
+                        if sv_len >= SVConfig.MIN_CSV_SIZE:
+                            # 装配复杂变异特征
+                            base_info["SUBTYPE"] = "INS_DEL"
+                            base_info["INS_LEN"] = ins_len
+                            base_info["DEL_LEN"] = del_len
+                            # 精确锚定 Reference 上的物理结束位置
+                            base_info["END"] = anchor_pos + del_len
+                            
+                            # 提取真正插入进来的那部分序列
+                            if query_seq:
+                                ins_qs = min(b1.qe, b2.qs)
+                                ins_qe = max(0, min(ins_qs + ins_len, len(query_seq)))
+                                base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
+                            
+                            # 按照示例报出 CSV，总长度为 INS+DEL
+                            return SVCandidate("CSV", chrom, anchor_pos, sv_len, read_name, info=base_info)
         return None
 
     # ================= Main Chain Iteration =================
@@ -873,6 +901,13 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
         anchor_end=bb_right.ref_start if anchor_strand == '+' else bb_right.ref_end
         dist_q = bb_right.qs - bb_left.qe
         dist_r = (bb_right.ref_start - bb_left.ref_end) if anchor_strand == '+' else (bb_left.ref_start - bb_right.ref_end)
+        # if anchor_chr=="chr3":
+        #     if abs(bb_left-80069727)<10000000 or abs(bb_right-80069727)<10000000:
+
+        #         print(bb_right.qs,bb_left.qe)
+        # =======================================================
+        # Scenario A: Presence of orphans (Complex/Jumping Variations)
+        # =======================================================
         # =======================================================
         # Scenario A: Presence of orphans (Complex/Jumping Variations)
         # =======================================================
@@ -885,6 +920,80 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
             sub_type_str = "COMPLEX"
             
             prev_chr, prev_strand, prev_pos = anchor_chr, anchor_strand, anchor_pos
+            
+            # --- 【新增逻辑】：精准提纯单个游离块为原生 INV 事件 ---
+            if len(merged_clusters) == 1:
+                m = merged_clusters[0]
+                is_inv = (m["strand"] != anchor_strand)
+                is_same_chr = (m["ref_name"] == anchor_chr)
+                
+                # 如果是发生在同一条染色体上的原地倒位，启动高精度两端 INDEL 提取
+                if is_inv and is_same_chr:
+                    inv_start, inv_end = m["ref_start"], m["ref_end"]
+                    inv_span_len = inv_end - inv_start
+                    
+                    # 按照主干链方向，严格对应物理左右端点和 Query 消耗
+                    if anchor_strand == '+':
+                        pos_outer_left = bb_left.ref_end
+                        pos_outer_right = bb_right.ref_start
+                        q_raw_left = m["q_start"] - bb_left.qe
+                        q_raw_right = bb_right.qs - m["q_end"]
+                    else:
+                        # 负链游走时，右侧主干是物理坐标靠左的边界
+                        pos_outer_left = bb_right.ref_end
+                        pos_outer_right = bb_left.ref_start
+                        q_raw_left = bb_right.qs - m["q_end"]
+                        q_raw_right = m["q_start"] - bb_left.qe
+                        
+                    raw_gap_left = inv_start - pos_outer_left
+                    raw_gap_right = pos_outer_right - inv_end
+                    
+                    # 计算 Delta 值以判断是插入还是缺失
+                    delta_left = q_raw_left - raw_gap_left
+                    delta_right = q_raw_right - raw_gap_right
+                    
+                    true_ins_left = max(0, delta_left)
+                    true_del_left = max(0, -delta_left)
+                    true_ins_right = max(0, delta_right)
+                    true_del_right = max(0, -delta_right)
+                    
+                    # 获取配置阈值 (兼容你的 SVConfig 全局对象)
+                    TRA_GAP_MIN = getattr(SVConfig, 'MIN_TRA_SIZE', 50000)
+                    TRA_RATIO_THRESHOLD = getattr(SVConfig, 'TRA_RATIO_THRESHOLD', 5.0)
+                    MIN_SV_SIZE = getattr(SVConfig, 'MIN_SV_SIZE', 30)
+                    
+                    # 甄别是否为跨越极大 Gap 的远端跳跃 (远端跳跃留给下方的 TRA/COMPLEX 逻辑处理)
+                    is_remote_inv = (
+                        raw_gap_left > TRA_GAP_MIN or 
+                        raw_gap_right > TRA_GAP_MIN or 
+                        raw_gap_left > inv_span_len * TRA_RATIO_THRESHOLD or 
+                        raw_gap_right > inv_span_len * TRA_RATIO_THRESHOLD
+                    )
+                    
+                    if not is_remote_inv:
+                        # 确认为纯正的 Local INV，将特征打包
+                        info = {
+                            # "EVENT": f"{read_name}_INV_{clean_block_id}",
+                            "INV_SPAN": int(inv_span_len),
+                            "LEFT_INS": int(true_ins_left),
+                            "RIGHT_INS": int(true_ins_right),
+                            "LEFT_DEL": int(true_del_left),
+                            "RIGHT_DEL": int(true_del_right)
+                        }
+                        
+                        is_del = (true_del_left + true_del_right) > MIN_SV_SIZE
+                        is_ins = (true_ins_left + true_ins_right) > MIN_SV_SIZE
+
+                        if is_ins and is_del: subtype = "INV-INS-DEL"
+                        elif is_ins: subtype = "INV-INS"
+                        elif is_del: subtype = "INV-DEL"
+                        else: subtype = "INV"
+                        
+                        info["SUBTYPE"] = subtype
+                        
+                        # 直接抛出标准的 INV 记录，并阻断后续的 COMPLEX 组装逻辑
+                        candidates.append(SVCandidate("INV", anchor_chr, inv_start, inv_span_len, read_name, info=info))
+                        continue 
             
             for idx, m in enumerate(merged_clusters):
                 sub_type_str += f"-{m['sv_type']}"
@@ -984,7 +1093,7 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
                 if up_down:
                     info_dict["INV_BACKBONE"] = True
                 candidates.append(SVCandidate("COMPLEX", anchor_chr, cpl_pos, max(0, dist_r), read_name, info=info_dict))
-
+            
         # =======================================================
         # Scenario B: Clean Backbone Transition (Pure INS/DEL/INV)
         # =======================================================
