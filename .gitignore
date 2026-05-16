@@ -11,18 +11,21 @@ __pycache__/
 # 过滤打包时生成的 build 和 dist 文件夹
 build/
 dist/
-
+example/*.p[n|d][g|f]
 # 过滤项目本身生成的 egg-info 目录 (截图中的 src/AsmSV.egg-info)
 *.egg-info/
 *.egg
-
+*.vcf*
+*.log
+*.png
+*bench*
 # =========================
 # 3. 虚拟环境 (预防你未来在目录下创建虚拟环境)
 # =========================
 venv/
 env/
 .env
-
+src/AsmSV/*.txt
 # =========================
 # 4. 编辑器与系统生成文件
 # =========================

@@ -65,6 +65,10 @@ def parseArgs(argv: List[str]) -> argparse.Namespace:
     filter_group.add_argument("--min-tra-size", type=int, default=SVConfig.MIN_TRA_SIZE, metavar="INT",
                               help="Threshold size to classify a large gap as a Translocation (TRA/BND).\n"
                                    f"[Default: {SVConfig.MIN_TRA_SIZE}]")
+    filter_group.add_argument("--min-csv", type=int, default=SVConfig.MIN_CSV_SIZE, metavar="INT", 
+                              help=f"Minimum CSV size for del-ins replacement event[Default: {SVConfig.MIN_CSV_SIZE}]")
+    filter_group.add_argument("--max-csv", type=int, default=SVConfig.MAX_CSV_SIZE, metavar="INT",
+                              help=f"Maximum CSV size for del-ins replacement event[Default: {SVConfig.MAX_CSV_SIZE}]. SVs larger than this value will be skipped.\n")
     filter_group.add_argument("--split-segments", action="store_true", 
                               help="Enable segment splitting/refinement before DP chaining. [Default: off]")
     
@@ -98,6 +102,8 @@ def update_sv_config(args: argparse.Namespace) -> None:
     if hasattr(args, 'min_mapq'): SVConfig.MIN_MAPQ = args.min_mapq
     if hasattr(args, 'insdel_tolerance'): SVConfig.INSDEL_TOLERANCE = args.insdel_tolerance
     if hasattr(args, 'min_tra_size'): SVConfig.MIN_TRA_SIZE = args.min_tra_size
+    if hasattr(args, 'min_csv'): SVConfig.MIN_CSV_SIZE = args.min_csv
+    if hasattr(args, 'max_csv'): SVConfig.MAX_CSV_SIZE = args.max_csv
 
     # 2. Clustering parameters
     if hasattr(args, 'merge_indels_tol'): SVConfig.MERGE_INDEL_TOL = args.merge_indels_tol
@@ -327,7 +333,7 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
             f.writelines(contig_lines)
                 
             alt_lines = [f"##ALT=<ID={t},Description=\"Structural Variant {t}\">\n" 
-                         for t in ["INS", "DEL", "DUP", "INV", "TRA", "BND", "COMPLEX"]]
+                         for t in ["INS", "DEL", "DUP", "INV", "TRA", "BND", "COMPLEX","CSV"]]
             f.writelines(alt_lines)
             
             info_defs = [
@@ -362,12 +368,15 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                 ("RIGHT_DEL", 1, "Integer", "Length of sequence deletion at the right breakpoint of a complex inversion"),
                 ("LEFT_INS", 1, "Integer", "Length of sequence insertion at the left breakpoint of a complex inversion"),
                 ("RIGHT_INS", 1, "Integer", "Length of sequence insertion at the right breakpoint of a complex inversion"),
-                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the backbone")
+                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the backbone"),
+                ("INS_LEN", 1, "Integer", "Length of the inserted sequence in a complex replacement (CSV)"),
+                ("DEL_LEN", 1, "Integer", "Length of the deleted reference sequence in a complex replacement (CSV)")
             ]
             info_lines = [f"##INFO=<ID={i_id},Number={i_num},Type={i_type},Description=\"{i_desc}\">\n" 
                           for i_id, i_num, i_type, i_desc in info_defs]
             f.writelines(info_lines)
-                
+            f.write("##FILTER=<ID=PASS,Description=\"All filters passed\">\n")
+            f.write("##FILTER=<ID=COMPLEX,Description=\"Complex structural variant\">\n")
             f.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
             f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n")
             
