@@ -38,6 +38,12 @@ def parseArgs(argv: List[str]) -> argparse.Namespace:
     io_group.add_argument("--ref", required=True, metavar="FILE", help="Reference Genome FASTA (indexed)")
     io_group.add_argument("--output", "-o", metavar="PATH", default="./results.vcf",
                           help="Output VCF path. If a directory is given, defaults to results.vcf inside it. [Default: ./results.vcf]")
+    io_group.add_argument("--mask", metavar="FILE", default=None,
+                          help="BED file of regions to exclude from output. [Default: None]")
+    io_group.add_argument("--sorted-bam1", metavar="FILE", default=None,
+                          help="Pre-sorted (queryname order) BAM for Hap1. Skips the sort step entirely.")
+    io_group.add_argument("--sorted-bam2", metavar="FILE", default=None,
+                          help="Pre-sorted (queryname order) BAM for Hap2. Skips the sort step entirely.")
     
     # === Group 2: VCF Format Options ===
     fmt_group = parser.add_argument_group("VCF Format Options")
@@ -86,8 +92,12 @@ def parseArgs(argv: List[str]) -> argparse.Namespace:
     # === Group 5: Advanced Options ===
     adv_group = parser.add_argument_group("Advanced Options")
     adv_group.add_argument("--threads", "-t", type=int, default=8, metavar="INT", help="Threads for parallel processing [Default: 8]")
-    adv_group.add_argument("--enable-density-filter", action="store_true", 
+    adv_group.add_argument("--enable-density-filter", action="store_true",
                            help="Enable high-density noise filtering (removes dense clusters of candidates)")
+    adv_group.add_argument("--density-window", type=int, default=SVConfig.DENSITY_WINDOW, metavar="INT",
+                           help=f"Window size for density filtering (bp). [Default: {SVConfig.DENSITY_WINDOW}]")
+    adv_group.add_argument("--max-sv-in-window", type=int, default=SVConfig.MAX_SV_IN_WINDOW, metavar="INT",
+                           help=f"Max SVs allowed per density window before suppression. [Default: {SVConfig.MAX_SV_IN_WINDOW}]")
     adv_group.add_argument("--debug", action="store_true", help="Enable verbose DEBUG logging")
     
     return parser.parse_args(argv)
@@ -121,6 +131,8 @@ def update_sv_config(args: argparse.Namespace) -> None:
     if hasattr(args, 'symbolic_alleles'): SVConfig.ENABLE_ALLELE = args.symbolic_alleles
     if hasattr(args, 'split_segments'): SVConfig.ENABLE_SPLIT_SEGMENTS = args.split_segments
     if hasattr(args, 'enable_density_filter'): SVConfig.ENABLE_DENSITY_FILTER = args.enable_density_filter
+    if hasattr(args, 'density_window'): SVConfig.DENSITY_WINDOW = args.density_window
+    if hasattr(args, 'max_sv_in_window'): SVConfig.MAX_SV_IN_WINDOW = args.max_sv_in_window
     
     # 5. Logical integrity checks
     if SVConfig.MIN_SV_SIZE >= SVConfig.MAX_SV_SIZE and SVConfig.MAX_SV_SIZE != -1:
@@ -180,48 +192,6 @@ def local_align(ref_seq: str, query_seq: str) -> Tuple[int, int, int, int, float
 
     return ref_start, ref_end, query_start, query_end, normalized_sim
 
-def retrieve_other_alignments(main_alignment: pysam.AlignedSegment, bam: pysam.AlignmentFile) -> List[pysam.AlignedSegment]:
-    """Extracts supplementary alignments from the SA tag of a read."""
-    try:
-        sa_tag = main_alignment.get_tag("SA")
-    except KeyError:
-        return []
-
-    other_alignments = []
-    for element in sa_tag.split(";"):
-        if not element:
-            continue
-            
-        fields = element.split(",")
-        if len(fields) < 6:
-            continue
-            
-        rname, pos, strand, cigar, mapq, nm = fields[:6]
-        
-        try:
-            a = pysam.AlignedSegment()
-            a.query_name = main_alignment.query_name
-            a.flag = 2048 | (16 if strand == "-" else 0)
-            
-            tid = bam.get_tid(rname)
-            if tid < 0: continue 
-            a.reference_id = tid
-            a.reference_start = int(pos) - 1  
-            a.mapping_quality = min(int(mapq), 255)
-            a.cigarstring = cigar
-            
-            a.next_reference_id = -1
-            a.next_reference_start = -1
-            a.template_length = 0
-            a.query_sequence = "" 
-            a.set_tags([("NM", int(nm), "i")])
-            
-            other_alignments.append(a)
-        except (ValueError, IndexError, TypeError):
-            continue
-            
-    return other_alignments
-
 # ==============================================================================
 # Filtering Algorithms
 # ==============================================================================
@@ -237,35 +207,34 @@ def filter_candidates_by_density(candidates: List[SVCandidate], window_size: int
     candidates_by_chr = defaultdict(list)
     for cand in candidates:
         candidates_by_chr[cand.chrom].append(cand)
-    
+
     final_candidates = []
 
     for chrom, chrom_cands in candidates_by_chr.items():
-        if not chrom_cands: 
+        if not chrom_cands:
             continue
-        
+
         chrom_cands.sort(key=lambda x: x.pos)
-        drop_ids = set()
-        window_cands = deque()
-        
-        for curr_cand in chrom_cands:
-            while window_cands and (curr_cand.pos - window_cands[0].pos > window_size):
-                window_cands.popleft()
-            
-            window_cands.append(curr_cand)
-            
-            if len(window_cands) > max_count:
-                active_cands = [c for c in window_cands if id(c) not in drop_ids]
-                
-                if len(active_cands) > max_count:
-                    best_cand = max(active_cands, key=lambda x: x.sv_len)
-                    for c in active_cands:
-                        if c is not best_cand:
-                            drop_ids.add(id(c))
-        
-        for cand in chrom_cands:
-            if id(cand) not in drop_ids:
-                final_candidates.append(cand)
+        drop_indices: set = set()
+        # deque of (sorted_index, candidate) pairs
+        window: deque = deque()
+
+        for i, curr_cand in enumerate(chrom_cands):
+            while window and (curr_cand.pos - window[0][1].pos > window_size):
+                window.popleft()
+
+            window.append((i, curr_cand))
+
+            if len(window) > max_count:
+                active = [(idx, c) for idx, c in window if idx not in drop_indices]
+
+                if len(active) > max_count:
+                    best_idx = max(active, key=lambda t: t[1].sv_len)[0]
+                    for idx, _ in active:
+                        if idx != best_idx:
+                            drop_indices.add(idx)
+
+        final_candidates.extend(c for i, c in enumerate(chrom_cands) if i not in drop_indices)
 
     return final_candidates
 
@@ -336,66 +305,98 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                          for t in ["INS", "DEL", "DUP", "INV", "TRA", "BND", "COMPLEX","CSV"]]
             f.writelines(alt_lines)
             
+           # ==============================================================================
+            # VCF INFO 头部定义 (极简规范版 + 完美拓扑绘图支持)
+            # ==============================================================================
             info_defs = [
+                # ── 1. 标准 VCF / SV 核心控制字段 ──
                 ("SVTYPE", 1, "String", "Type of structural variant"),
                 ("SVLEN", ".", "Integer", "Difference in length between REF and ALT alleles"),
                 ("END", 1, "Integer", "End position of the variant described in this record."),
+                # ("SVCLAIM", 1, "String", "Claim type: J=junction/breakpoint, D=dosage/copy-number (VCF 4.4)"),
+                ("MATEID", ".", "String", "ID of the mate BND record (VCF 4.2 BND pairing)"),
+                
+                # ── 2. 单样本单倍型支持与读名追踪 ──
                 ("SUPPORT_H1", 1, "Integer", "Number of reads/haplotypes from hap1 supporting the variant"),
                 ("SUPPORT_H2", 1, "Integer", "Number of reads/haplotypes from hap2 supporting the variant"),
                 ("RNAMES", ".", "String", "Names of supporting reads"),
-                ("SOURCE", 1, "String", "Algorithm source: Split_Read or CIGAR"),
-                ("STRANDS", 1, "String", "Strand orientation of the structural variant (e.g., +-, -+)"),
-                ("SUBTYPE", 1, "String", "Detailed classification of the complex variant (e.g., INV-INS-DEL, InvTRA, InvDUP)"),
+                ("SOURCE", 1, "String", "Detection layer: backbone (split-read), CIGAR / CIGAR_MERGED (CIGAR-internal), COMPLEX / COMPLEX_EDGE (orphan-cluster)"),
+                
+                # ── 3. 易位 (BND/TRA) 拓扑核心 ──
                 ("TRA_TYPE", 1, "String", "Translocation type: INTER_CHR (diff chroms) or INTRA_CHR (same chrom dist > limit)"),
                 ("CHR2", 1, "String", "Chromosome for BND/TRA connection"),
                 ("POS2", 1, "Integer", "Position for BND/TRA connection"),
+                ("STRANDS", 1, "String", "Strand orientation of the structural variant (e.g., +-, -+)"),
+                
+                # ── 4. 复杂变异 (CSV/INV/Macro-Event) 组合语义与物理长度 ──
+                ("EVENTTYPE", 1, "String", "High-level event type for CSV summary records"),
+                ("SUBTYPE", 1, "String", "Variant subclass: DUP:TANDEM, DUP:PROXIMAL, DUP:DISP:INTRA, DUP:DISP:INTER, InvDUP:*, INV, INV-INS, INV-DEL, INV-INS-DEL, INS_DEL, LOCAL_RETAIN, COMPLEX, MULTI_DUP:TANDEM"),
+                ("DEL_LEN", 1, "Integer", "Length of reference sequence deleted or replaced (bp)"),
+                ("INS_LEN", 1, "Integer", "Length of novel or inserted query sequence (bp)"),
+                ("SEQ", 1, "String", "Inserted sequence: written to INFO for CSV/INS_DEL; embedded in ALT allele for INS"),
+                ("BP_DETAILS", 1, "String", "Compressed breakpoint metrics (Format: LC:L_CLIP,RC:R_CLIP,LF:L_FLANK,RF:R_FLANK)"),
+                
+                # ── 5. 事件图谱与级联嵌套追踪 ──
                 ("EVENT", ".", "String", "ID of the primary event associated with this breakend or variant"),
-                ("PEVENT", ".", "String", "Parent event ID for nested sub-variants in complex SVs"),
-                ("REPLACED_QUERY_LEN", 1, "Integer", "Length of the query sequence in a COMPLEX event"),
-                ("INV_BACKBONE",0,"Flag","The backbone of the complex structural variant is inverted relative to the absolute reference coordinates."),
-                ("REPLACED_REF_LEN", 1, "Integer", "Length of the reference sequence deleted/replaced by a COMPLEX event"),
+                # ("PEVENT", ".", "String", "Parent event ID for nested sub-variants in complex SVs"),
                 ("ORPHAN_CLUSTERS", 1, "Integer", "Number of unmapped or orphan read clusters forming the COMPLEX variant"),
-                ("SOURCE_CHR", 1, "String", "Source chromosome of the duplicated or translocated sequence"),
-                ("SOURCE_POS", 1, "Integer", "Source start coordinate of the duplicated or translocated sequence"),
-                ("SOURCE_END", 1, "Integer", "Source end coordinate of the duplicated or translocated sequence"),
                 ("MERGED_BLOCKS", 1, "Integer", "Number of tandem alignment blocks merged into this single SV event"),
-                ("COPIES", 1, "Integer", "Estimated copy number of the tandemly amplified sequence within the SV"),
-                ("DEST_CHR", 1, "String", "Destination chromosome where the sequence entity is inserted or attached"),
-                ("DEST_POS", 1, "Integer", "Destination coordinate where the sequence entity is inserted or attached"),
-                ("INV_SPAN", 1, "Integer", "Length of the inverted segment on the reference genome"),
-                ("FLANK_SPAN", 1, "Integer", "Span of the flanking normal sequences; negative value indicates Target Site Duplication (TSD)"),
-                ("LEFT_DEL", 1, "Integer", "Length of sequence deletion at the left breakpoint of a complex inversion"),
-                ("RIGHT_DEL", 1, "Integer", "Length of sequence deletion at the right breakpoint of a complex inversion"),
-                ("LEFT_INS", 1, "Integer", "Length of sequence insertion at the left breakpoint of a complex inversion"),
-                ("RIGHT_INS", 1, "Integer", "Length of sequence insertion at the right breakpoint of a complex inversion"),
-                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the backbone"),
-                ("INS_LEN", 1, "Integer", "Length of the inserted sequence in a complex replacement (CSV)"),
-                ("DEL_LEN", 1, "Integer", "Length of the deleted reference sequence in a complex replacement (CSV)")
+                
+                # ── 6. 序列来源与碎片化拓扑追踪 (极简版) ──
+                ("CPLX_IDX", 1, "Integer", "Zero-based index of the sub-cluster within a complex macro-event"),
+                ("SRCREG", 1, "String", "Source genomic region of the variant sequence (Format: chr:start-end)"),
+                ("FRAGS", 1, "String", "Comma-separated sub-spans if the source region is fragmented (start1-end1,start2-end2)"),
+                
+                # ── 7. 主干网络拓扑特征 (专供绘图可视化保留) ──
+                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the flanking genomic backbone elements"),
+                ("BACKBONE_FLIP", 0, "Flag", "Flag indicating backbone alignment encounters coordinate regression or backtracking across the gap"),
+                
+                # ── 8. 倒位与串联重复精细结构 ──
+                ("INV_SPAN", 1, "Integer", "Genomic base-pair span length of the inner inverted region"),
+                # ("SIDE", 1, "String", "Breakend side within a paired BND event: LEFT or RIGHT"),
+                ("TANDEM_SOURCE", 1, "String", "Genomic coordinate region of the original source sequence for tandem insertions"),
             ]
+            
+            
+            # 写入 INFO 头部行
             info_lines = [f"##INFO=<ID={i_id},Number={i_num},Type={i_type},Description=\"{i_desc}\">\n" 
                           for i_id, i_num, i_type, i_desc in info_defs]
             f.writelines(info_lines)
-            f.write("##FILTER=<ID=PASS,Description=\"All filters passed\">\n")
-            f.write("##FILTER=<ID=COMPLEX,Description=\"Complex structural variant\">\n")
+            
+            # 写入 FILTER 过滤标签定义（与代码中 filter_str 的赋值完美闭环）
+            f.write("##FILTER=<ID=PASS,Description=\"All filters passed, high confidence variant\">\n")
+            f.write("##FILTER=<ID=COMPLEX,Description=\"Multi-cluster complex structural variant macro summary record (filtered)\">\n")
+            f.write("##FILTER=<ID=LOCAL_BND,Description=\"Local short-range breakend junction within complex cluster, not a true distal translocation (filtered)\">\n")
+            f.write("##FILTER=<ID=OVERSIZE,Description=\"SV size exceeds user-defined MAX_SV_SIZE threshold\">\n")
+            f.write("##FILTER=<ID=EDGE_COMPLEX,Description=\"Macro-level summary record for a complex structural rearrangement clustered at the read edge\">\n")
+            f.write("##FILTER=<ID=EDGE_CPLX_SUB,Description=\"Sub-component span record representing a constituent topology within an edge complex event\">\n")
+            f.write("##FILTER=<ID=LOCAL_RETAIN,Description=\"Orphan block falls entirely inside the backbone gap (same strand); retained in-gap sequence, not a true duplication\">\n")
+            # 写入 FORMAT / 样本列头部
             f.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
             f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n")
             
             # Generator-based processing to avoid loading all strings into memory
             type_counter = defaultdict(int)
+            type_counter_all=defaultdict(int)
             count = 0
             
             def record_generator():
                 nonlocal count
-                for sv in sv_list:  
+                for sv in sv_list:
                     try:
-                        type_counter[sv.type] += 1
-                        current_type_idx = type_counter[sv.type]
-                        
+                        if not sv.id:
+                            type_counter[sv.type] += 1
+                            current_type_idx = type_counter[sv.type]
+                        else:
+                            
+                            current_type_idx = 0  # unused; sv.id already carries the VCF ID
+
                         record_tuple = sv.to_vcf_record(
-                            current_type_idx,  
-                            alt_allele=SVConfig.ENABLE_ALLELE, 
+                            current_type_idx,
+                            alt_allele=SVConfig.ENABLE_ALLELE,
                             reference=fasta
                         )
+                        type_counter_all[sv.type] += 1
                         count += 1
                         yield "\t".join(map(str, record_tuple)) + "\n"
                     except Exception as e:
@@ -405,7 +406,7 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
             f.writelines(record_generator())
                 
         logger.info(f"Successfully wrote {count} SVs to output file: {output_path}")
-        logger.info(f"SV Counts by Type: {dict(type_counter)}")
+        logger.info(f"SV Counts by Type: {dict(type_counter_all)}")
 
     except IOError as e:
         logger.error(f"Failed to open or write to output VCF file '{output_path}': {e}")

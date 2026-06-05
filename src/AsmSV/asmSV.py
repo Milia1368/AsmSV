@@ -15,7 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed, wait, FIRST_CO
 from AsmSV.structures import SVCandidate,BedMaskFilter, filter_candidates_by_mask
 from AsmSV.genotype import cluster_and_genotype
 from AsmSV.utils import (
-    validate_file, filter_candidates_by_density, write_vcf, 
+    validate_file, filter_candidates_by_density, write_vcf,
     prepare_output_path, parseArgs, update_sv_config
 )
 from AsmSV.config import SVConfig
@@ -248,18 +248,24 @@ def sort_bam_by_name(input_bam: str, threads: int = 4, reuse_sorted: bool = True
 # ==============================================================================
 # Core Parallel Execution Pipeline
 # ==============================================================================
-def main_pipeline(bam_path: str,label:str, mask_filter: BedMaskFilter,threads: int = 8) -> Tuple[List[SVCandidate], Dict]:
+def main_pipeline(bam_path: str, label: str, mask_filter: BedMaskFilter,
+                  threads: int = 8, presorted_bam: Optional[str] = None) -> Tuple[List[SVCandidate], Dict]:
     """Manages multiprocessing execution for processing SVs from a BAM file."""
     header_dict = {}
+    header_source = presorted_bam if presorted_bam else bam_path
     try:
-        with pysam.AlignmentFile(bam_path, "rb") as bam:
+        with pysam.AlignmentFile(header_source, "rb") as bam:
             bam_header_sq = bam.header.to_dict().get('SQ', [])
             header_dict = {d['SN']: d['LN'] for d in bam_header_sq}
     except Exception as e:
-        logger.error(f"Failed to read BAM header from {bam_path}: {e}")
+        logger.error(f"Failed to read BAM header from {header_source}: {e}")
         return [], {}
 
-    qsort_bam, created_now = sort_bam_by_name(bam_path, threads=threads, reuse_sorted=True)
+    if presorted_bam:
+        qsort_bam, created_now = presorted_bam, False
+        logger.info(f"Using pre-sorted BAM: {qsort_bam}")
+    else:
+        qsort_bam, created_now = sort_bam_by_name(bam_path, threads=threads, reuse_sorted=True)
     
     # Configure process pool and control IPC throughput
     executor = ProcessPoolExecutor(max_workers=threads)
@@ -305,10 +311,9 @@ def main_pipeline(bam_path: str,label:str, mask_filter: BedMaskFilter,threads: i
             try: os.remove(qsort_bam)
             except OSError: pass
 
-    # 区域屏蔽过滤
     if mask_filter and mask_filter.is_active:
-        all_candidates = filter_candidates_by_mask(all_candidates, mask_filter)
-        logger.info(f"{label} After Masking: {len(all_candidates)}")
+        all_svs = filter_candidates_by_mask(all_svs, mask_filter)
+        logger.info(f"{label} After Masking: {len(all_svs)}")
 
     logger.info(f"Total SV candidates found in {os.path.basename(bam_path)}: {len(all_svs)}")
 
@@ -340,7 +345,7 @@ def main_ctrl(args, argv):
     logger.info(f" - Input Ref       : {args.ref}")
     logger.info(f" - Input Hap1 BAM  : {args.bam1}")
     logger.info(f" - Input Hap2 BAM  : {args.bam2}")
-    if getattr(args, 'mask', None):
+    if args.mask:
         logger.info(f" - Mask BED        : {args.mask}")
     logger.info("=========================================================")
 
@@ -355,19 +360,25 @@ def main_ctrl(args, argv):
         validate_file(args.bam1)
         validate_file(args.bam2)
         validate_file(args.ref)
+        if args.sorted_bam1:
+            validate_file(args.sorted_bam1)
+        if args.sorted_bam2:
+            validate_file(args.sorted_bam2)
     except Exception as e:
         logger.error(f"Input validation failed: {e}")
         sys.exit(1)
 
     ref_fasta = pysam.FastaFile(args.ref)
    
-    mask_filter = BedMaskFilter(getattr(args, 'mask', None))
+    mask_filter = BedMaskFilter(args.mask)
     start_time = time.time()
     
     try:
         # Process haplotypes concurrently
-        svs_h1, header_dict = main_pipeline(args.bam1, "hap1",mask_filter,args.threads)
-        svs_h2, _ = main_pipeline(args.bam2, "hap2",mask_filter,args.threads)
+        svs_h1, header_dict = main_pipeline(args.bam1, "hap1", mask_filter, args.threads,
+                                             presorted_bam=args.sorted_bam1)
+        svs_h2, _ = main_pipeline(args.bam2, "hap2", mask_filter, args.threads,
+                                   presorted_bam=args.sorted_bam2)
 
         logger.info(">>> Global Clustering and Genotyping...")
         final_svs = cluster_and_genotype(svs_h1, svs_h2)
@@ -412,10 +423,7 @@ def run(argv):
     logging.info("Finished in %0.2f seconds." % (time.time() - starttime))
 
 def main():
-    """
-    Parameterless entry point for setuptools console_scripts.
-    It automatically reads command-line arguments from sys.argv.
-    """
+    """Parameterless entry point for setuptools console_scripts."""
     sys.exit(run(sys.argv[1:]))
 
 if __name__ == '__main__':

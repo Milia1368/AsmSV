@@ -1,5 +1,3 @@
-from asyncio import events
-from heapq import merge
 import logging
 import edlib
 from typing import List, Callable, Dict, Set, Optional
@@ -21,10 +19,8 @@ def calculate_seq_similarity(seq1: str, seq2: str) -> float:
     """
     if not seq1 or not seq2:
         return 0.0
-        
+
     len1, len2 = len(seq1), len(seq2)
-    if max(len1, len2) == 0: 
-        return 1.0
 
     # Mechanism 1: Flank Trimming (mitigates wobble in tandem repeats)
     trim_len = 3 
@@ -228,6 +224,7 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
             all_read_names.update(sv.read_names)
         if "EVENT" in sv.info:
             merged_events.add(sv.info["EVENT"])
+        if "PEVENT" in sv.info:
             merged_pvents.add(sv.info["PEVENT"])
         sources.update(sv.sources)
         if "Hap1" in sv.sources: h1_cnt += 1
@@ -254,9 +251,15 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     new_sv.genotype = gt
     new_sv.info["SUPPORT_H1"] = h1_cnt
     new_sv.info["SUPPORT_H2"] = h2_cnt
+
+    # 3-B: 保留 mateid（BND 配对 ID）：若簇内所有记录的 mateid 一致则继承
+    mateids = {sv.mateid for sv in cluster if sv.mateid}
+    if len(mateids) == 1:
+        new_sv.mateid = mateids.pop()
     if len(merged_events)!=0:
         # 加上 sorted 可以保证每次输出的顺序一致，不会乱跳
         new_sv.info["EVENT"] = ",".join(sorted(merged_events))
+    if len(merged_pvents)!=0:
         new_sv.info["PEVENT"] = ",".join(sorted(merged_pvents))
     # Retain the longest sequence as the representative REF/ALT for INS
     if rep.type == "INS":
@@ -290,10 +293,15 @@ def cluster_and_genotype(hap1_svs: List[SVCandidate], hap2_svs: List[SVCandidate
     final_results = []
     clusterable_buckets = defaultdict(list)
     
-    # 2. Segregate unclusterable COMPLEX events
+    # 2. Segregate events: FILTER=COMPLEX summary records pass through directly;
+    #    all others enter clustering buckets
     for sv in raw_svs:
-        if sv.type == "COMPLEX" :
+        if sv.filter == "COMPLEX":
+            # 3-A: summary records from [A3] — not meaningful to cluster
             final_results.append(sv)
+        elif sv.type == "CSV":
+            subtype = sv.info.get("SUBTYPE", "UNKNOWN")
+            clusterable_buckets[f"CSV_{subtype}"].append(sv)
         else:
             clusterable_buckets[sv.type].append(sv)
 
@@ -315,10 +323,24 @@ def cluster_and_genotype(hap1_svs: List[SVCandidate], hap2_svs: List[SVCandidate
         if bnd_tra_candidates := clusterable_buckets[sv_type]:
             bnd_tra_candidates.sort(key=lambda x: (x.chrom, x.pos, x.info.get("CHR2", ""), x.info.get("POS2", 0)))
             final_results.extend(_core_cluster_logic(bnd_tra_candidates, _match_bnd_tra_sv))
-    
-    if csv_candidates := clusterable_buckets["CSV"]:
-        csv_candidates.sort(key=common_sort_key)
-        final_results.extend(_core_cluster_logic(csv_candidates, _match_csv_sv))
+    # CSV routing:
+    #   INS_DEL / INV-* → _match_csv_sv (checks pos+end+ins_len+del_len separately)
+    #   InvDUP:* / DUP:* dispersed/proximal → _match_span_sv (pos+sv_len)
+    # Note: DUP:TANDEM creates SVTYPE=INS or DUP (not CSV), so no CSV_DUP:TANDEM bucket.
+    # Note: UNPAIRED_INV_BP creates SVTYPE=BND, so no CSV_UNPAIRED_INV_BP bucket.
+    CSV_INS_DEL_TYPES = {"INS_DEL", "INV-INS", "INV-DEL", "INV-INS-DEL"}
+    CSV_SPAN_TYPES = {
+        "InvDUP:TANDEM", "InvDUP:PROXIMAL", "InvDUP:DISP:INTRA", "InvDUP:DISP:INTER",
+        "DUP:PROXIMAL", "DUP:DISP:INTRA", "DUP:DISP:INTER",
+    }
+
+    for sv_type in sorted(CSV_INS_DEL_TYPES | CSV_SPAN_TYPES):
+        if csv_candidates := clusterable_buckets.get(f"CSV_{sv_type}"):
+            csv_candidates.sort(key=common_sort_key)
+            if sv_type in CSV_INS_DEL_TYPES:
+                final_results.extend(_core_cluster_logic(csv_candidates, _match_csv_sv))
+            else:
+                final_results.extend(_core_cluster_logic(csv_candidates, _match_span_sv))
 
 
     logger.info(f"Genotyping Summary: Input={len(raw_svs)}, Output={len(final_results)}")

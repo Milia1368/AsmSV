@@ -2,6 +2,7 @@
 # Configuration & Static Constants
 # ==============================================================================
 from typing import List, Dict, Tuple, Set, Optional, Any
+from dataclasses import dataclass, field as dc_field
 from AsmSV.config import SVConfig
 from AsmSV.structures import SVCandidate
 
@@ -380,7 +381,7 @@ class AlignedSegment:
                         if 0 <= g_start < g_end <= len(query_seq):
                             ins_seq = query_seq[g_start:g_end].translate(RC_TRANS)[::-1]
 
-                # VCF standard: Position must be the reference base strictly preceding the variant
+                # VCF standard: POS is the last mapped reference base before the insertion
                 sv_pos = curr_ref
 
                 if p_ins:
@@ -399,7 +400,7 @@ class AlignedSegment:
                 if p_del: del_gap += length
 
             elif op == 2: # DEL
-                sv_pos = curr_ref # Base preceding deletion
+                sv_pos = curr_ref  # 0-based start of deleted region
                 
                 if p_del:
                     if del_gap <= merge_gap_tol:
@@ -432,6 +433,100 @@ class AlignedSegment:
 # ==============================================================================
 # SV Resolvers
 # ==============================================================================
+
+# ── 2-A: OrphanCluster dataclass ──────────────────────────────────────────────
+@dataclass
+class OrphanCluster:
+    """
+    condense_orphan_blocks 的输出单元。
+
+    subtype 命名规则（两层，冒号分隔）：
+      正向：DUP:TANDEM | DUP:PROXIMAL | DUP:DISP:INTRA | DUP:DISP:INTER
+      反向：Inv 前缀，如 InvDUP:TANDEM | InvDUP:DISP:INTRA
+
+    FIX: 新增 true_q_len 和 sub_spans 两个字段。
+      - true_q_len：各子块 (qe - qs) 之和，表示孤儿块在 query 中实际消耗的碱基数，
+        用于散在重复 INS 和倒位重复 CSV 的 SVLEN，避免用 max(qe)-min(qs) 高估。
+      - sub_spans：各子块在参考基因组上的 (ref_start, ref_end) 列表，
+        用于在 INFO 字段中精确记录 source 坐标，防止多块聚合后 span 虚大误导用户。
+    """
+    ref_name  : str
+    strand    : str
+    ref_start : int
+    ref_end   : int
+    q_start   : int
+    q_end     : int
+    raw_type  : str   # "CSV"（同染色体）或 "BND"（跨染色体）
+    subtype   : str   # 机制字符串，见上方规则
+    blocks    : list = dc_field(default_factory=list, repr=False)
+    true_q_len: int  = 0    #
+    sub_spans : list = dc_field(default_factory=list, repr=False)  # [(ref_start, ref_end), ...]
+
+    @property
+    def ref_len(self) -> int:
+        return self.ref_end - self.ref_start
+
+    @property
+    def q_len(self) -> int:
+        """Span-based query length (max qe - min qs). May include inter-block gaps."""
+        return self.q_end - self.q_start
+
+    @property
+    def is_inter_chr(self) -> bool:
+        return self.raw_type == "BND"
+
+    @property
+    def is_inverted(self) -> bool:
+        return self.subtype.startswith("Inv")
+
+    @property
+    def is_fragmented(self) -> bool:
+        """True when sub-blocks have ref gaps > 100 bp between them (non-contiguous source)."""
+        if len(self.sub_spans) <= 1:
+            return False
+        return any(
+            self.sub_spans[k + 1][0] - self.sub_spans[k][1] > 100
+            for k in range(len(self.sub_spans) - 1)
+        )
+
+
+def _classify_orphan_cluster(
+    c_chr           : str,
+    c_strand        : str,
+    c_r_start       : int,
+    c_r_end         : int,
+    anchor_chr      : str,
+    anchor_strand   : str,
+    anchor_bp_left  : int,
+    anchor_bp_right : int,
+    tandem_max_dist   : int,
+    proximal_max_dist : int,
+) -> tuple:
+    inv_prefix = "Inv" if (c_strand != anchor_strand) else ""
+
+    if c_chr != anchor_chr:
+        return ("BND", f"{inv_prefix}DUP:DISP:INTER")
+
+    gap_left  = min(anchor_bp_left, anchor_bp_right)
+    gap_right = max(anchor_bp_left, anchor_bp_right)
+    dist_to_gap = max(0, gap_left - c_r_end, c_r_start - gap_right)
+    orphan_len  = max(1, c_r_end - c_r_start)
+
+    is_strictly_inside = (c_r_start >= gap_left and c_r_end <= gap_right)
+
+    if is_strictly_inside:
+        if c_strand != anchor_strand:
+            return ("CSV", "INV")
+        else:
+            return ("CSV", "LOCAL_RETAIN")
+
+    if dist_to_gap <= tandem_max_dist and dist_to_gap <= orphan_len:
+        return ("CSV", f"{inv_prefix}DUP:TANDEM")
+    elif dist_to_gap <= proximal_max_dist:
+        return ("CSV", f"{inv_prefix}DUP:PROXIMAL")
+    else:
+        return ("CSV", f"{inv_prefix}DUP:DISP:INTRA")
+
 def split_segments(segments: List[AlignedSegment]) -> List[AlignedSegment]:
     """Handles parallel query overlaps by iteratively splitting conflict segments."""
     segments.sort(key=lambda x: (x.qe - x.qs)) 
@@ -548,12 +643,16 @@ def solve_chain_dp(nodes: List[AlignedSegment], query_length: int, K: int = 32) 
     return chain[::-1]
 
 def find_collinear_backbone(segs: List[AlignedSegment]):
-    """Identifies the dominant collinear mapping sequence to act as the primary backbone."""
+    """Strict Collinear Backbone: Identifies the dominant, uni-directional mapping chain."""
     n = len(segs)
     if n <= 1:
         if n == 1: segs[0].is_backbone = True
         return set(range(n)), segs[0].strand if n == 1 else '+'
         
+    # 按照 Query 坐标排序，保证 DP 顺序的绝对正确
+    indexed_segs = sorted(enumerate(segs), key=lambda x: (x[1].qs, x[1].qe))
+    
+    # 投票决定全局主干方向（只允许一个方向成为主干）
     sum_plus = sum((s.qe - s.qs) for s in segs if s.strand == '+')
     sum_minus = sum((s.qe - s.qs) for s in segs if s.strand == '-')
     global_strand = '+' if sum_plus >= sum_minus else '-'
@@ -561,670 +660,404 @@ def find_collinear_backbone(segs: List[AlignedSegment]):
     dp, prev_node = [0.0] * n, [-1] * n
     MAX_TOLERABLE_OVERLAP = 1000 
     
-    for i, seg_i in enumerate(segs):
+    for i in range(n):
+        orig_idx_i, seg_i = indexed_segs[i]
+        
+        # 【核心约束 1】：方向不一致的片段，直接剥夺主干资格，强行沦为游离块 (Orphan)
+        if seg_i.strand != global_strand:
+            dp[i] = 0.0
+            continue
+            
         q_len_i = seg_i.qe - seg_i.qs
         dp[i] = q_len_i
         
         for j in range(i):
-            seg_j = segs[j]
-            score = dp[j] + q_len_i
+            orig_idx_j, seg_j = indexed_segs[j]
+            if dp[j] <= 0.0: continue
             
+            # 【核心约束 2】：跨染色体的片段绝不能连在同一个主干上
             if seg_i.ref_name != seg_j.ref_name:
-                score -= (q_len_i + (seg_j.qe - seg_j.qs) + 999999) 
-            else:
-                ref_overlap = max(0, min(seg_i.ref_end, seg_j.ref_end) - max(seg_i.ref_start, seg_j.ref_start))
-                r_gap = (seg_i.ref_start - seg_j.ref_end) if global_strand == '+' else (seg_j.ref_start - seg_i.ref_end)
+                continue
                 
-                if ref_overlap > MAX_TOLERABLE_OVERLAP or r_gap < -MAX_TOLERABLE_OVERLAP:
-                    score -= (q_len_i + (seg_j.qe - seg_j.qs) + 999999)
-                else:
-                    if seg_i.strand != seg_j.strand: score -= 500
-                    if r_gap > 0: score -= min(1000.0, r_gap * 0.001)
+            ref_overlap = max(0, min(seg_i.ref_end, seg_j.ref_end) - max(seg_i.ref_start, seg_j.ref_start))
+            q_overlap = max(0, seg_j.qe - seg_i.qs)
+            
+            # 严格几何方向的距离计算（因为已知均为 global_strand）
+            r_gap = (seg_i.ref_start - seg_j.ref_end) if global_strand == '+' else (seg_j.ref_start - seg_i.ref_end)
+            # =================================================================
+            # 【自适应重叠率过滤】：替换原本单一的 MAX_TOLERABLE_OVERLAP = 1000
+            # =================================================================
+            len_i_q = seg_i.qe - seg_i.qs
+            len_j_q = seg_j.qe - seg_j.qs
+            min_q_len = min(len_i_q, len_j_q)
+            
+            len_i_r = seg_i.ref_end - seg_i.ref_start
+            len_j_r = seg_j.ref_end - seg_j.ref_start
+            min_r_len = min(len_i_r, len_j_r)
+            
+            q_overlap_ratio = q_overlap / min_q_len if min_q_len > 0 else 0
+            ref_overlap_ratio = ref_overlap / min_r_len if min_r_len > 0 else 0
+            
+            MIN_OVERLAP_THRES   = getattr(SVConfig, "BB_OVERLAP_MIN_BASE", 200)
+            MAX_OVERLAP_CEILING = getattr(SVConfig, "BB_OVERLAP_MAX_CEILING", 5000)
+            OVERLAP_RATIO_CUT   = getattr(SVConfig, "BB_OVERLAP_RATIO_THRES", 0.5)
+            
+            # 拦截条件判定
+            is_q_invalid = (q_overlap > MAX_OVERLAP_CEILING) or (q_overlap > MIN_OVERLAP_THRES and q_overlap_ratio > OVERLAP_RATIO_CUT)
+            is_r_invalid = (ref_overlap > MAX_OVERLAP_CEILING) or (ref_overlap > MIN_OVERLAP_THRES and ref_overlap_ratio > OVERLAP_RATIO_CUT)
+            is_gap_invalid = (r_gap < -MAX_OVERLAP_CEILING) or (r_gap < -MIN_OVERLAP_THRES and (abs(r_gap) / min_r_len) > OVERLAP_RATIO_CUT)
+            
+            if is_q_invalid or is_r_invalid or is_gap_invalid:
+                continue 
+            
+            # 去除冗余重叠长度，防止得分虚高
+            score = dp[j] + q_len_i - max(ref_overlap, q_overlap)
+            if r_gap > 0: score -= min(1000.0, r_gap * 0.001)
 
             if score > dp[i]:
                 dp[i], prev_node[i] = score, j
                 
-    max_idx = max(range(n), key=lambda x: dp[x])
+    max_i = max(range(n), key=lambda x: dp[x])
     backbone_indices = set()
     
-    curr = max_idx
+    curr = max_i
     while curr != -1:
-        segs[curr].is_backbone = True 
-        backbone_indices.add(curr)
+        orig_idx, seg = indexed_segs[curr]
+        seg.is_backbone = True 
+        backbone_indices.add(orig_idx)
         curr = prev_node[curr]
         
     return backbone_indices, global_strand
 
-def condense_orphan_blocks(orphans: List[AlignedSegment], anchor_chr: str, anchor_pos: int, anchor_strand: str, max_ref_dist: int = 100000, max_query_dist: int = 50000) -> List[Dict]:
-    """Condenses complex floating orphan fragments into cluster events."""
-    if not orphans: return []
-    condensed_clusters = []
-    
-    curr_chr, curr_strand = orphans[0].ref_name, orphans[0].strand
-    curr_r_start, curr_r_end = orphans[0].ref_start, orphans[0].ref_end
-    curr_q_start, curr_q_end = orphans[0].qs, orphans[0].qe
-    curr_blocks = [orphans[0]] 
-    def finalize_cluster(c_chr, c_strand, c_r_start, c_r_end, c_q_start, c_q_end, c_blocks):
-        is_inv = (c_strand != anchor_strand)
-        prefix = "Inv" if is_inv else ""
-        
-        if c_chr != anchor_chr: 
+def condense_orphan_blocks(
+    orphans         : List[AlignedSegment],
+    anchor_chr      : str,
+    anchor_strand   : str,
+    anchor_bp_left  : int,
+    anchor_bp_right : int,
+    max_ref_dist    : int = 100_000,
+    max_query_dist  : int = 50_000,
+) -> List[OrphanCluster]:
+    """
+    将孤儿比对块聚合为空间连贯的簇，然后对每个簇分类。
 
-            sv_type = "TRA" 
-        else:
-            
-            dist_to_anchor = min(abs(c_r_start - anchor_pos), abs(c_r_end - anchor_pos))
+    聚合条件（全部满足）：
+      - 同一参考染色体
+      - 同一链方向（不同链代表不同机制，不能合并）
+      - ref 边缘距离 ≤ max_ref_dist
+      - query 连续性：query 间隔 ≤ max_query_dist
+    """
+    if not orphans:
+        return []
 
-            if dist_to_anchor > 1000000: 
-                sv_type = "DUP:ISP" 
-            else:
-                is_upstream = (anchor_strand == '+' and c_r_start <= anchor_pos) or \
-                              (anchor_strand == '-' and c_r_start >= anchor_pos)
-                if is_upstream:
-                    sv_type = "DUP:TANDEM"
-                else:
-                    sv_type = "DUP:ISP"
-                if is_inv:
-                    prefix, sv_type = "", "InvDUP" 
-                
-        return {
-            "sv_type": f"{prefix}{sv_type}",       
-            "ref_name": c_chr, "strand": c_strand,
-            "ref_start": c_r_start, "ref_end": c_r_end, "ref_len": c_r_end - c_r_start,
-            "q_start": c_q_start, "q_end": c_q_end, "q_len": c_q_end - c_q_start,
-            "original_blocks": c_blocks  
-        }
-    
+    TANDEM_MAX   = getattr(SVConfig, "TANDEM_MAX_REF_DIST",   500)
+    PROXIMAL_MAX = getattr(SVConfig, "PROXIMAL_MAX_REF_DIST", 10_000)
+
+    def _finalize(c_chr, c_strand, c_r_start, c_r_end, c_q_start, c_q_end, c_blocks):
+        raw_type, subtype = _classify_orphan_cluster(
+            c_chr, c_strand, c_r_start, c_r_end,
+            anchor_chr, anchor_strand,
+            anchor_bp_left, anchor_bp_right,
+            TANDEM_MAX, PROXIMAL_MAX,
+        )
+        true_q_len = max(b.qe for b in c_blocks) - min(b.qs for b in c_blocks)
+        # FIX: 记录各子块的 ref 坐标，防止多块合并后 span 虚大
+        sub_spans  = [(b.ref_start, b.ref_end) for b in c_blocks]
+        return OrphanCluster(
+            ref_name=c_chr, strand=c_strand,
+            ref_start=c_r_start, ref_end=c_r_end,
+            q_start=c_q_start, q_end=c_q_end,
+            raw_type=raw_type, subtype=subtype,
+            blocks=c_blocks,
+            true_q_len=true_q_len,
+            sub_spans=sub_spans,
+        )
+
+    clusters = []
+    seg0 = orphans[0]
+    curr_chr, curr_strand       = seg0.ref_name, seg0.strand
+    curr_r_start, curr_r_end    = seg0.ref_start, seg0.ref_end
+    curr_q_start, curr_q_end    = seg0.qs, seg0.qe
+    curr_blocks                 = [seg0]
+
     for seg in orphans[1:]:
-        can_merge = False
-        if seg.ref_name == curr_chr and seg.strand == curr_strand:
-            ref_dist = min(abs(seg.ref_start - curr_r_end), abs(seg.ref_end - curr_r_start))
-            if ref_dist <= max_ref_dist and (seg.qs - curr_q_end) <= max_query_dist:
-                can_merge = True
-                
-        if can_merge:
-            curr_r_start, curr_r_end = min(curr_r_start, seg.ref_start), max(curr_r_end, seg.ref_end)
-            curr_q_end = max(curr_q_end, seg.qe)
+        ref_edge_dist = min(
+            abs(seg.ref_start - curr_r_end),
+            abs(seg.ref_end   - curr_r_start),
+        )
+        mergeable = (
+            seg.ref_name == curr_chr
+            and seg.strand == curr_strand
+            and ref_edge_dist         <= max_ref_dist
+            and (seg.qs - curr_q_end) <= max_query_dist
+        )
+        if mergeable:
+            curr_r_start = min(curr_r_start, seg.ref_start)
+            curr_r_end   = max(curr_r_end,   seg.ref_end)
+            curr_q_end   = max(curr_q_end,   seg.qe)
             curr_blocks.append(seg)
         else:
-            condensed_clusters.append(finalize_cluster(curr_chr, curr_strand, curr_r_start, curr_r_end, curr_q_start, curr_q_end, curr_blocks))
-            curr_chr, curr_strand = seg.ref_name, seg.strand
+            clusters.append(_finalize(curr_chr, curr_strand,
+                                      curr_r_start, curr_r_end,
+                                      curr_q_start, curr_q_end, curr_blocks))
+            curr_chr, curr_strand    = seg.ref_name, seg.strand
             curr_r_start, curr_r_end = seg.ref_start, seg.ref_end
             curr_q_start, curr_q_end = seg.qs, seg.qe
-            curr_blocks = [seg]
-            
-    condensed_clusters.append(finalize_cluster(curr_chr, curr_strand, curr_r_start, curr_r_end, curr_q_start, curr_q_end, curr_blocks))
-    return condensed_clusters
+            curr_blocks              = [seg]
 
-def pair_inv_signals(signals: List[Dict], read_name: str, main_strand: str) -> List[SVCandidate]:
-    """Matches standalone inversion breakpoints into consolidated inversion/translocation events."""
+    clusters.append(_finalize(curr_chr, curr_strand,
+                              curr_r_start, curr_r_end,
+                              curr_q_start, curr_q_end, curr_blocks))
+    return clusters
+
+
+def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx_set: Set[int], read_name: str, query_seq: Optional[str]) -> List['SVCandidate']:
+    """Master controller that extracts linear/complex SVs from alignment chain transitions (Strict Backbone)."""
     candidates = []
-    if not signals:
+    complex_cluster_idx = 0
+    clean_block_id = 0
+    
+    if not main_idx_set or len(main_idx_set) < 2: 
         return candidates
-        
-    paired_indices = set()
     
-    TRA_GAP_MIN = SVConfig.MIN_TRA_SIZE
-    TRA_RATIO_THRESHOLD = SVConfig.TRA_RATIO_THRESHOLD
-    MIN_SV_SIZE = SVConfig.MIN_SV_SIZE
-
-    for i in range(len(signals)):
-        if i in paired_indices: continue
-        s1 = signals[i]
-        
-        for j in range(i + 1, len(signals)):
-            if j in paired_indices: continue
-            s2 = signals[j]
-            
-            # Topological closure requirement: must be contiguous on the same chromosome
-            if s1["chrom"] != s2["chrom"] or s1.get("clean_id", 0) != s2.get("clean_id", -1):
-                continue
-                
-            is_fwd = (s1['type'] == '3to3' and s2['type'] == '5to5')
-            is_rev = (s1['type'] == '5to5' and s2['type'] == '3to3')
-            if not (is_fwd or is_rev):
-                continue
-            inv_strand = '-' if is_fwd else '+'
-            
-            # Ignore false-positive inversions caused by noisy mappings
-            if inv_strand == main_strand:
-                break
-                
-            if is_fwd:
-                strands = "+-"
-                pos_outer_left = s1['pos1']
-                inv_end, inv_start = s1['pos2'], s2['pos1']
-                pos_outer_right = s2['pos2']
-                q_raw_left, q_raw_right = s1['dist_q'], s2['dist_q']
-            else:
-                strands = "-+"
-                pos_outer_left = s2['pos2']
-                inv_start, inv_end = s1['pos2'], s2['pos1']
-                pos_outer_right = s1['pos1']
-                q_raw_left, q_raw_right = s2['dist_q'], s1['dist_q']
-                
-            start, end = min(inv_start, inv_end), max(inv_start, inv_end)
-            inv_span_len = end - start
-            total_span = pos_outer_right - pos_outer_left
-            
-            raw_gap_left = start - pos_outer_left
-            raw_gap_right = pos_outer_right - end
-
-            # Delta check: differentiate aligner truncation from real INDEL presence
-            delta_left = q_raw_left - raw_gap_left
-            delta_right = q_raw_right - raw_gap_right
-
-            true_ins_left = max(0, delta_left)
-            true_del_left = max(0, -delta_left)
-            true_ins_right = max(0, delta_right)
-            true_del_right = max(0, -delta_right)
-
-            sv_type = "INV"
-            info = {
-                "INV_SPAN": int(inv_span_len),
-                "LEFT_INS": int(q_raw_left),
-                "RIGHT_INS": int(q_raw_right)
-            }
-            
-            # Scenario 1: Source of INV comes from remote location (Translocation context)
-            is_remote_inv = (
-                abs(raw_gap_left) > TRA_GAP_MIN or 
-                abs(raw_gap_right) > TRA_GAP_MIN or 
-                abs(raw_gap_left) > inv_span_len * TRA_RATIO_THRESHOLD or 
-                abs(raw_gap_right) > inv_span_len * TRA_RATIO_THRESHOLD
-            )
-
-            if is_remote_inv:
-                sv_type = "BND"
-                info.update({
-                    "SUBTYPE": "InvTRA",
-                    "STRANDS": strands,
-                    "FLANK_SPAN": int(total_span)
-                })
-                
-            # Scenario 2: Local DUP-INV (Flanks exhibit extensive regression)
-            elif total_span < -MIN_SV_SIZE:
-                sv_type = "DUP"
-                info.update({"SUBTYPE": "InvDUP"})
-
-            # Scenario 3: Native inversion, checking for accompanying INDELs
-            else:
-                info.update({
-                    "LEFT_DEL": int(raw_gap_left),
-                    "RIGHT_DEL": int(raw_gap_right)
-                })
-                is_del = (true_del_left + true_del_right) > MIN_SV_SIZE
-                is_ins = (true_ins_left + true_ins_right) > MIN_SV_SIZE
-
-                if is_ins and is_del: subtype = "INV-INS-DEL"
-                elif is_ins: subtype = "INV-INS"
-                elif is_del: subtype = "INV-DEL"
-                else: subtype = "INV"
-                info["SUBTYPE"] = subtype
-
-            # Commit the paired variations
-            if sv_type == "BND":
-                cand = SVCandidate("BND", s1['chrom'], pos_outer_left, 0, read_name, info)
-                cand.info["CHR2"] = s1['chrom']
-                cand.info["POS2"] = pos_outer_right
-                candidates.append(SVCandidate("INV", s1['chrom'], start, inv_span_len, read_name, info))
-                candidates.append(cand)
-            else:
-                candidates.append(SVCandidate(sv_type, s1['chrom'], start, inv_span_len, read_name, info))
-            
-            paired_indices.update([i, j])
-            break  
-
-    # Process unpaired inversion breakends
-    for i, s in enumerate(signals):
-        if i not in paired_indices:
-            strands = "++" if s["type"] == "5to5" else "--"
-            candidates.append(SVCandidate("BND", s["chrom"], s["pos1"], 0, read_name, info={
-                "SUBTYPE": "UNPAIRED_INV_BREAKEND", 
-                "STRANDS": strands,
-                "CHR2": s["chrom"], 
-                "POS2": s["pos2"],
-                "LEFT_INS": int(max(0, s["dist_q"])),
-                "RIGHT_INS": int(max(0, s["dist_q"]))
-            }))
-            
-    return candidates
-
-def resolve_chain_svs1(chains: List[AlignedSegment], main_strand: str, main_idx_set: Set[int], read_name: str, query_seq: Optional[str]) -> List[SVCandidate]:
-    """Master controller that extracts linear/complex SVs from alignment chain transitions."""
-    candidates, bp_signals = [], []
-    complex_cluster_idx = 0
-    clean_block_id = 0
-    if not main_idx_set or len(main_idx_set) < 2: return candidates
     main_idx = sorted(list(main_idx_set))
+    
     def extract_insertion_seq(qs: int, qe: int, strand: str) -> str:
-        """Helper to obtain properly-oriented insertion sequence from the query string."""
         if not query_seq: return ""
         seq_fwd = query_seq[qs:qe]
         return seq_fwd.translate(RC_TRANS)[::-1] if strand == '-' else seq_fwd
 
     # =======================================================================
-    # Shared Linear SV Resolver (Adhering to DRY principle)
-    # Applied to both Backbone transitions and internal Orphan structures.
+    # Shared Linear SV Resolver
     # =======================================================================
-    def check_and_extract_linear_sv(b1: AlignedSegment, b2: AlignedSegment, 
-                                    chrom: str, strand: str, 
-                                    source_label: str,isbackbone=True, extra_info: dict = None) -> Optional[SVCandidate]:
-        if b1.strand != b2.strand:
-            return None 
-            
-        dist_q = b2.qs - b1.qe
-        
-        # Enforce left-aligned VCF coordinate specification
-        if strand == '+':
-            ref_break_1, ref_break_2 = b1.ref_end, b2.ref_start
-        else:
-            ref_break_1, ref_break_2 = b1.ref_start, b2.ref_end
-            
-        dist_r = (ref_break_2 - ref_break_1) if strand == '+' else (ref_break_1 - ref_break_2)
-        anchor_pos = min(ref_break_1, ref_break_2)
-                
-        sv_len = abs(dist_q - dist_r)
-        base_info = {"SOURCE": source_label}
-        if extra_info: base_info.update(extra_info)
-        
-        # Check for Tandem Duplications
-        if abs(dist_q) < SVConfig.GAP_TOLERANCE and dist_r < -SVConfig.MIN_SV_SIZE:
-            dup_len = abs(dist_r) + dist_q
-            if SVConfig.MAX_SV_SIZE == -1 or (SVConfig.MAX_SV_SIZE > 0 and dup_len < SVConfig.MAX_SV_SIZE):
-               base_info["SUBTYPE"] = "DUP:TANDEM"
-            return SVCandidate("INS", chrom, anchor_pos, dup_len, read_name, info=base_info)
-       
-        if sv_len < 20:
+    def check_and_extract_linear_sv(b1: 'AlignedSegment', b2: 'AlignedSegment',
+                                    chrom: str, strand: str,
+                                    source_label: str, isbackbone=True, extra_info: dict = None) -> Optional['SVCandidate']:
+        if b1.strand != b2.strand or b1.ref_name != b2.ref_name:
             return None
-            
-        # Standard INS/DEL processing
-        if sv_len >= SVConfig.MIN_SV_SIZE + SVConfig.INSDEL_TOLERANCE:
-            if abs(dist_q) < SVConfig.GAP_TOLERANCE or abs(dist_r) < SVConfig.GAP_TOLERANCE:
-                # Delegate massive gaps to BND handling
-                if abs(dist_r) > SVConfig.MIN_TRA_SIZE:
-                    return None
-                    
-                sv_type = "DEL" if dist_r > dist_q else "INS"
-                
-                # Retrieve structural insertion sequence logic
-                if sv_type == "INS":
-                    if sv_len < SVConfig.MAX_ALLELE_LEN or SVConfig.MAX_SV_SIZE == -1:
-                        if query_seq:
-                            ins_qs = min(b1.qe, b2.qs)
-                            ins_qe = max(0, min(ins_qs + sv_len, len(query_seq)))
-                            base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
-                                
-                return SVCandidate(sv_type, chrom, anchor_pos, sv_len, read_name, info=base_info)
-            else:
-                if abs(dist_r)> SVConfig.MIN_TRA_SIZE:
-                    return None
-                #complex ind-del in backbone
-                # 防御性规则 1：必须是正向的空白消耗（严禁重叠，负数说明是DUP或比对异常）
-                if isbackbone:
-                    if dist_q > 0 and dist_r > 0:
-                        ins_len = int(dist_q)
-                        del_len = int(dist_r)
-                        
-                        # 防御性规则 2：双维度均须显著突破噪音容忍度
-                        if ins_len >= SVConfig.GAP_TOLERANCE and del_len >= SVConfig.GAP_TOLERANCE:
-                            
-                            # 防御性规则 3：作为复杂变异，总变异量门槛应适当提高（例如基础阈值的 1.2 倍）
-                            if sv_len >= SVConfig.MIN_CSV_SIZE:
-                                # 装配复杂变异特征
-                                base_info["SUBTYPE"] = "INS_DEL"
-                                base_info["INS_LEN"] = ins_len
-                                base_info["DEL_LEN"] = del_len
-                                # 精确锚定 Reference 上的物理结束位置
-                                base_info["END"] = anchor_pos + del_len
-                                #sv_len=dist_q+dist_r
-                                # 提取真正插入进来的那部分序列
-                                if query_seq:
-                                    ins_qs = min(b1.qe, b2.qs)
-                                    ins_qe = max(0, min(ins_qs + ins_len, len(query_seq)))
-                                    base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
-                                
-                                # 按照示例报出 CSV，总长度为 INS+DEL
-                                return SVCandidate("CSV", chrom, anchor_pos, sv_len, read_name, info=base_info)
-        return None
 
-    # ================= Main Chain Iteration =================
-    for i in range(len(main_idx) - 1):
-        idx_L, idx_R = main_idx[i], main_idx[i+1]
-        bb_left, bb_right = chains[idx_L], chains[idx_R]
-        
-        if not (bb_left.is_backbone and bb_right.is_backbone): continue 
-        
-        orphans_in_between = chains[idx_L + 1 : idx_R]
-        anchor_chr, anchor_strand = bb_left.ref_name, bb_left.strand
-        anchor_pos = bb_left.ref_end if anchor_strand == '+' else bb_left.ref_start
-        anchor_end=bb_right.ref_start if anchor_strand == '+' else bb_right.ref_end
-        dist_q = bb_right.qs - bb_left.qe
-        dist_r = (bb_right.ref_start - bb_left.ref_end) if anchor_strand == '+' else (bb_left.ref_start - bb_right.ref_end)
-        # Scenario A: Presence of orphans (Complex/Jumping Variations)
-        # =======================================================
-        if orphans_in_between:
-            clean_block_id += 1
-            merged_clusters = condense_orphan_blocks(orphans_in_between, anchor_chr, anchor_pos, anchor_strand)
-            
-            complex_cluster_idx += 1 
-            event_id = f"{read_name}_CPLX_{complex_cluster_idx}"
-            sub_type_str = "COMPLEX"
-            
-            prev_chr, prev_strand, prev_pos = anchor_chr, anchor_strand, anchor_pos
-            
-            # --- 【新增逻辑】：精准提纯单个游离块为原生 INV 事件 ---
-            if len(merged_clusters) == 1:
-                m = merged_clusters[0]
-                is_inv = (m["strand"] != anchor_strand)
-                is_same_chr = (m["ref_name"] == anchor_chr)
-                
-                # 如果是发生在同一条染色体上的原地倒位，启动高精度两端 INDEL 提取
-                if is_inv and is_same_chr:
-                    inv_start, inv_end = m["ref_start"], m["ref_end"]
-                    inv_span_len = inv_end - inv_start
-                    
-                    # 按照主干链方向，严格对应物理左右端点和 Query 消耗
-                    if anchor_strand == '+':
-                        pos_outer_left = bb_left.ref_end
-                        pos_outer_right = bb_right.ref_start
-                        q_raw_left = m["q_start"] - bb_left.qe
-                        q_raw_right = bb_right.qs - m["q_end"]
-                    else:
-                        # 负链游走时，右侧主干是物理坐标靠左的边界
-                        pos_outer_left = bb_right.ref_end
-                        pos_outer_right = bb_left.ref_start
-                        q_raw_left = bb_right.qs - m["q_end"]
-                        q_raw_right = m["q_start"] - bb_left.qe
-                        
-                    raw_gap_left = inv_start - pos_outer_left
-                    raw_gap_right = pos_outer_right - inv_end
-                    
-                    # 计算 Delta 值以判断是插入还是缺失
-                    delta_left = q_raw_left - raw_gap_left
-                    delta_right = q_raw_right - raw_gap_right
-                    
-                    true_ins_left = max(0, delta_left)
-                    true_del_left = max(0, -delta_left)
-                    true_ins_right = max(0, delta_right)
-                    true_del_right = max(0, -delta_right)
-                    
-                    # 获取配置阈值 (兼容你的 SVConfig 全局对象)
-                    TRA_GAP_MIN = SVConfig.MIN_TRA_SIZE
-                    TRA_RATIO_THRESHOLD = SVConfig.TRA_RATIO_THRESHOLD
-                    MIN_SV_SIZE = SVConfig.MIN_SV_SIZE
-                    
-                    # 甄别是否为跨越极大 Gap 的远端跳跃 (远端跳跃留给下方的 TRA/COMPLEX 逻辑处理)
-                    is_remote_inv = (
-                        abs(raw_gap_left) > TRA_GAP_MIN or 
-                        abs(raw_gap_right) > TRA_GAP_MIN or 
-                        abs(raw_gap_left) > inv_span_len * TRA_RATIO_THRESHOLD or 
-                        abs(raw_gap_right) > inv_span_len * TRA_RATIO_THRESHOLD
-                    )
-                    
-                    if not is_remote_inv:
-                        # 确认为纯正的 Local INV，将特征打包
-                        info = {
-                            # "EVENT": f"{read_name}_INV_{clean_block_id}",
-                            "INV_SPAN": int(inv_span_len),
-                            "LEFT_INS": int(q_raw_left),
-                            "RIGHT_INS": int(q_raw_right),
-                            "LEFT_DEL": int(raw_gap_left),
-                            "RIGHT_DEL": int(raw_gap_right)
-                        }
-                        
-                        is_del = (true_del_left + true_del_right) > MIN_SV_SIZE
-                        is_ins = (true_ins_left + true_ins_right) > MIN_SV_SIZE
-
-                        if is_ins and is_del: subtype = "INV-INS-DEL"
-                        elif is_ins: subtype = "INV-INS"
-                        elif is_del: subtype = "INV-DEL"
-                        else: subtype = "INV"
-                        
-                        info["SUBTYPE"] = subtype
-                        
-                        # 直接抛出标准的 INV 记录，并阻断后续的 COMPLEX 组装逻辑
-                        candidates.append(SVCandidate("INV", anchor_chr, inv_start, inv_span_len, read_name, info=info))
-                        continue 
-                # if not is_inv and is_same_chr:
-                #     #提取与相邻的具体
-
-                #     info["SUBTYPE"] = "DUP:TANDEM"
-                #     candidates.append(SVCandidate("DUP", anchor_chr, inv_start, inv_span_len, read_name, info=info))
-                #     continue
-            
-            for idx, m in enumerate(merged_clusters):
-                sub_type_str += f"-{m['sv_type']}"
-                sub_event_id = f"{event_id}_sub{idx}"
-                blocks = m["original_blocks"]
-                sub_info={}
-                # Resolve nested events inside the complex cluster
-                nested_merged_dict = {}
-                #检查首block 是否dup
-                if idx==0:
-                    internal_cand = check_and_extract_linear_sv(
-                            b1=chains[idx_L], b2=orphans_in_between[0], 
-                            chrom=m["ref_name"], strand=m["strand"], 
-                            source_label="COMPLEX_NESTED", isbackbone=False,
-                            extra_info={"PEVENT": sub_event_id}
-                        )
-                    merge_key = (internal_cand.raw_type, internal_cand.pos)
-                    internal_cand.info["MERGED_BLOCKS"] = 1
-                    nested_merged_dict[merge_key] = internal_cand
-                for k in range(len(blocks) - 1):
-                    internal_cand = check_and_extract_linear_sv(
-                        b1=blocks[k], b2=blocks[k+1], 
-                        chrom=m["ref_name"], strand=m["strand"], 
-                        source_label="COMPLEX_NESTED", isbackbone=False,
-                        extra_info={"PEVENT": sub_event_id}
-                    )
-                    
-                    if internal_cand:
-                        merge_key = None
-                        # Tolerance for minor breakpoint wobbling
-                        for existing_key in nested_merged_dict.keys():
-                            if internal_cand.raw_type == existing_key[0] and abs(internal_cand.pos - existing_key[1]) <= 10:
-                                merge_key = existing_key
-                                break
-                        
-                        if merge_key is None:
-                            merge_key = (internal_cand.raw_type, internal_cand.pos)
-                            internal_cand.info["MERGED_BLOCKS"] = 1
-                            nested_merged_dict[merge_key] = internal_cand
-                        else:
-                            # Concatenate sequence structures of continuous jumps
-                            existing_cand = nested_merged_dict[merge_key]
-                            existing_cand.sv_len += internal_cand.sv_len
-                            
-                            if "SEQ" in existing_cand.info and "SEQ" in internal_cand.info:
-                                existing_cand.info["SEQ"] += internal_cand.info["SEQ"]
-                                
-                            if "REPLACED_REF_LEN" in internal_cand.info:
-                                existing_cand.info["REPLACED_REF_LEN"] = existing_cand.info.get("REPLACED_REF_LEN", 0) + internal_cand.info["REPLACED_REF_LEN"]
-                            
-                            existing_cand.info["MERGED_BLOCKS"] = existing_cand.info.get("MERGED_BLOCKS", 1) + 1
-                            existing_cand.info["SUBTYPE"] = "MULTIPLE_DUP:TANDEM" if internal_cand.info.get("SUBTYPE") == "DUP:TANDEM" else "MERGED_INS"   
-                
-                candidates.extend(nested_merged_dict.values())
-
-                m_enter_pos = m["ref_start"] if m["strand"] == '+' else m["ref_end"]
-                m_leave_pos = m["ref_end"] if m["strand"] == '+' else m["ref_start"]
-                
-                is_translocation = (prev_chr != m["ref_name"])
-                is_distant_jump = (prev_chr == m["ref_name"] and abs(prev_pos - m_enter_pos) > SVConfig.MIN_TRA_SIZE)
-                
-                if is_translocation or is_distant_jump:
-                    candidates.append(SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
-                        "PEVENT": event_id, "EVENT": f"{sub_event_id}_BND",
-                        "CHR2": m["ref_name"], "POS2": m_enter_pos, 
-                        "TRA_TYPE": "INTER_CHR" if is_translocation else "INTRA_CHR",
-                        "STRANDS": prev_strand + m["strand"]
-                    }))
-
-                prev_chr, prev_strand, prev_pos = m["ref_name"], m["strand"], m_leave_pos
-                span_type= m["sv_type"]
-                span_len=m["ref_len"]
-                if ( "DUP:TANDEM" in span_type )and span_len>SVConfig.MIN_TRA_SIZE:
-                    continue
-                if span_type == "TRA":
-                    span_type, sub_info["SUBTYPE"] = "DUP", "TRA"  
-                elif span_type == "InvTRA":
-                    span_type, sub_info["SUBTYPE"] = "INV", "InvTRA" 
-                sub_info.update({
-                    "PEVENT": event_id, "EVENT": sub_event_id,
-                    "SOURCE_CHR": m["ref_name"], "SOURCE_POS": m["ref_start"], "SOURCE_END": m["ref_end"],
-                    "DEST_CHR": prev_chr, "DEST_POS": prev_pos
-                })
-                
-                candidates.append(SVCandidate(
-                    span_type, m["ref_name"], m["ref_start"], m["ref_len"], read_name, info=sub_info
-                ))
-                
-                
-               
-            bb_right_enter = bb_right.ref_start if bb_right.strand == '+' else bb_right.ref_end
-            if prev_chr != bb_right.ref_name or (prev_chr == bb_right.ref_name and abs(prev_pos - bb_right_enter) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000)):
-                candidates.append(SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
-                    "PEVENT": event_id, "EVENT": f"{event_id}_tail_BND",
-                    "CHR2": bb_right.ref_name, "POS2": bb_right_enter,
-                    "TRA_TYPE": "INTER_CHR" if prev_chr != bb_right.ref_name else "INTRA_CHR",
-                    "STRANDS": prev_strand + bb_right.strand
-                }))
-                
-            if len(merged_clusters) >= 2:
-                # 判断是否是从右向左遍历（发生坐标倒置）
-                up_down = bool(anchor_pos > anchor_end)
-                strands_str = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
-                cpl_pos = anchor_end if up_down else anchor_pos
-                info_dict = {
-                    "EVENT": event_id, 
-                    "SUBTYPE": sub_type_str,
-                    "REPLACED_QUERY_LEN": int(max(0, dist_q)), 
-                    "ORPHAN_CLUSTERS": len(merged_clusters),
-                    "BACKBONE_STRAND": strands_str
-                }
-
-                if up_down:
-                    info_dict["INV_BACKBONE"] = True
-                candidates.append(SVCandidate("COMPLEX", anchor_chr, cpl_pos, max(0, dist_r), read_name, info=info_dict))
-                #检查尾block 是否dup
-                internal_cand = check_and_extract_linear_sv(
-                        b1=orphans_in_between[-1], b2=chains[idx_R], 
-                        chrom=m["ref_name"], strand=m["strand"], 
-                        source_label="COMPLEX_NESTED", isbackbone=False,
-                        extra_info={"PEVENT": sub_event_id}
-                    )
-                merge_key = (internal_cand.raw_type, internal_cand.pos)
-                internal_cand.info["MERGED_BLOCKS"] = 1
-                nested_merged_dict[merge_key] = internal_cand
-            
-        # =======================================================
-        # Scenario B: Clean Backbone Transition (Pure INS/DEL/INV)
-        # =======================================================
-        else:
-            if bb_right.strand != bb_left.strand:
-                orient = "3to3" if bb_left.strand == '+' else "5to5"
-                exit_pos = bb_left.ref_end if bb_left.strand == '+' else bb_left.ref_start
-                enter_pos = bb_right.ref_start if bb_right.strand == '+' else bb_right.ref_end
-                
-                bp_signals.append({
-                    "type": orient, 
-                    "chrom": anchor_chr, 
-                    "pos1": exit_pos,    
-                    "pos2": enter_pos,   
-                    "strand_L": bb_left.strand, 
-                    "strand_R": bb_right.strand, 
-                    "dist_q": dist_q,
-                    "clean_id": clean_block_id,
-                    "read_name": read_name
-                })
-                continue
-            
-            # Extract standard variants utilizing the shared resolving logic
-            backbone_cand = check_and_extract_linear_sv(
-                b1=bb_left, b2=bb_right, 
-                chrom=anchor_chr, strand=anchor_strand, 
-                source_label="backbone"
-            )
-            if backbone_cand:
-                candidates.append(backbone_cand)
-        
-    if bp_signals:
-        candidates.extend(pair_inv_signals(bp_signals, read_name, main_strand))
-        
-    return candidates
-
-
-def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_set: Set[int], read_name: str, query_seq: Optional[str]) -> List[SVCandidate]:
-    """Master controller that extracts linear/complex SVs from alignment chain transitions."""
-    candidates, bp_signals = [], []
-    complex_cluster_idx = 0
-    clean_block_id = 0
-    if not main_idx_set or len(main_idx_set) < 2: return candidates
-    main_idx = sorted(list(main_idx_set))
-    
-    def extract_insertion_seq(qs: int, qe: int, strand: str) -> str:
-        if not query_seq: return ""
-        seq_fwd = query_seq[qs:qe]
-        return seq_fwd.translate(RC_TRANS)[::-1] if strand == '-' else seq_fwd
-
-    # =======================================================================
-    # Shared Linear SV Resolver 
-    # =======================================================================
-    def check_and_extract_linear_sv(b1: AlignedSegment, b2: AlignedSegment, 
-                                    chrom: str, strand: str, 
-                                    source_label: str, isbackbone=True, extra_info: dict = None) -> Optional[SVCandidate]:
-        # if b1.strand != b2.strand:
-        #     return None 
-            
         dist_q = b2.qs - b1.qe
-        
-        if strand == '+':
-            ref_break_1, ref_break_2 = b1.ref_end, b2.ref_start
-        else:
-            ref_break_1, ref_break_2 = b1.ref_start, b2.ref_end
-            
+        if strand == '+': ref_break_1, ref_break_2 = b1.ref_end, b2.ref_start
+        else:             ref_break_1, ref_break_2 = b1.ref_start, b2.ref_end
+
         dist_r = (ref_break_2 - ref_break_1) if strand == '+' else (ref_break_1 - ref_break_2)
-        anchor_pos = min(ref_break_1, ref_break_2)
-                
+        left_bp, right_bp = min(ref_break_1, ref_break_2), max(ref_break_1, ref_break_2)
         sv_len = abs(dist_q - dist_r)
+        
         base_info = {"SOURCE": source_label}
         if extra_info: base_info.update(extra_info)
-        
-        # 精准捕捉 Tandem Duplications (向后跳跃的比对)
-        if abs(dist_q) < SVConfig.GAP_TOLERANCE and dist_r < -SVConfig.MIN_SV_SIZE:
-            dup_len = abs(dist_r) + dist_q
-            if SVConfig.MAX_SV_SIZE == -1 or (SVConfig.MAX_SV_SIZE > 0 and dup_len < SVConfig.MAX_SV_SIZE):
-               base_info["SUBTYPE"] = "DUP:TANDEM"
-            return SVCandidate("INS", chrom, anchor_pos, dup_len, read_name, info=base_info)
-       
-        if sv_len < 20: return None
-            
-        if sv_len >= SVConfig.MIN_SV_SIZE + SVConfig.INSDEL_TOLERANCE:
-            if abs(dist_q) < SVConfig.GAP_TOLERANCE or abs(dist_r) < SVConfig.GAP_TOLERANCE:
-                if abs(dist_r) > SVConfig.MIN_TRA_SIZE: return None
-                sv_type = "DEL" if dist_r > dist_q else "INS"
-                if sv_type == "INS":
-                    if sv_len < SVConfig.MAX_ALLELE_LEN or SVConfig.MAX_SV_SIZE == -1:
-                        if query_seq:
-                            ins_qs, ins_qe = min(b1.qe, b2.qs), max(0, min(min(b1.qe, b2.qs) + sv_len, len(query_seq)))
-                            base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
-                return SVCandidate(sv_type, chrom, anchor_pos, sv_len, read_name, info=base_info)
+
+        if abs(dist_q) < getattr(SVConfig, 'GAP_TOLERANCE', 50) and dist_r < -getattr(SVConfig, 'MIN_SV_SIZE', 30):
+            dup_len = abs(dist_r) + dist_q 
+            filter_tag = "OVERSIZE" if (getattr(SVConfig, 'MAX_SV_SIZE', -1) != -1 and dup_len >= getattr(SVConfig, 'MAX_SV_SIZE', -1)) else None
+            sv_type = "INS" if dup_len < getattr(SVConfig, "TANDEM_DUP_INS_THRESHOLD", 1_000) else "DUP"
+
+            pos = right_bp if sv_type == "INS" else left_bp
+            if sv_type == "INS":
+                base_info["TANDEM_SOURCE"] = f"{chrom}:{left_bp}-{right_bp}"
             else:
-                if abs(dist_r) > SVConfig.MIN_TRA_SIZE: return None
-                if isbackbone:
-                    if dist_q > 0 and dist_r > 0:
-                        ins_len, del_len = int(dist_q), int(dist_r)
-                        if ins_len >= SVConfig.GAP_TOLERANCE and del_len >= SVConfig.GAP_TOLERANCE:
-                            if sv_len >= getattr(SVConfig, 'MIN_CSV_SIZE', SVConfig.MIN_SV_SIZE * 1.2):
-                                base_info.update({"SUBTYPE": "INS_DEL", "INS_LEN": ins_len, "DEL_LEN": del_len, "END": anchor_pos + del_len})
-                                if query_seq:
-                                    ins_qs, ins_qe = min(b1.qe, b2.qs), max(0, min(min(b1.qe, b2.qs) + ins_len, len(query_seq)))
-                                    base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
-                                return SVCandidate("CSV", chrom, anchor_pos, sv_len, read_name, info=base_info)
+                base_info["END"] = right_bp
+
+            base_info["SUBTYPE"] = "DUP:TANDEM"
+            cand = SVCandidate(sv_type, chrom, pos, dup_len, read_name, info=base_info, filter_str=filter_tag)
+            cand.q_start, cand.q_end = min(b1.qe, b2.qs), min(b1.qe, b2.qs) + dup_len
+            return cand
+
+        if sv_len < 20: 
+            return None
+
+        if sv_len >= getattr(SVConfig, 'MIN_SV_SIZE', 30) + getattr(SVConfig, 'INSDEL_TOLERANCE', 10):
+            if abs(dist_q) < getattr(SVConfig, 'GAP_TOLERANCE', 50) or abs(dist_r) < getattr(SVConfig, 'GAP_TOLERANCE', 50):
+                if abs(dist_r) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000): return None
+                sv_type = "DEL" if dist_r > dist_q else "INS"
+                
+                if sv_type == "INS" and (sv_len < getattr(SVConfig, 'MAX_ALLELE_LEN', 100000) or getattr(SVConfig, 'MAX_SV_SIZE', -1) == -1):
+                    if query_seq:
+                        ins_qs, ins_qe = min(b1.qe, b2.qs), max(0, min(min(b1.qe, b2.qs) + sv_len, len(query_seq)))
+                        base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
+                
+                cand = SVCandidate(sv_type, chrom, left_bp, sv_len, read_name, info=base_info)
+                cand.q_start, cand.q_end = min(b1.qe, b2.qs), max(b1.qe, b2.qs)
+                return cand
+           
+            else:
+                if abs(dist_r) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000): return None
+                if isbackbone and dist_q > 0 and dist_r > 0:
+                    ins_len, del_len = int(dist_q), int(dist_r)
+                    if ins_len >= getattr(SVConfig, 'GAP_TOLERANCE', 50) and del_len >= getattr(SVConfig, 'GAP_TOLERANCE', 50):
+                        if sv_len >= getattr(SVConfig, 'MIN_CSV_SIZE', getattr(SVConfig, 'MIN_SV_SIZE', 30) * 1.2):
+                            base_info.update({"SUBTYPE": "INS_DEL", "INS_LEN": ins_len, "DEL_LEN": del_len, "END": left_bp + del_len})
+                            if query_seq:
+                                ins_qs, ins_qe = min(b1.qe, b2.qs), max(0, min(min(b1.qe, b2.qs) + ins_len, len(query_seq)))
+                                base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
+                            
+                            cand = SVCandidate("CSV", chrom, left_bp, sv_len, read_name, info=base_info)
+                            cand.q_start, cand.q_end = min(b1.qe, b2.qs), max(b1.qe, b2.qs)
+                            return cand
         return None
 
-    # ================= Main Chain Iteration =================
+    # =======================================================================
+    # Shared Helper: Extract & Merge Nested Linear SVs
+    # =======================================================================
+    def _extract_and_merge_nested_nodes(nodes: List['AlignedSegment'], source_label: str, macro_event_id: str, nested_dict: dict):
+        """提取内部嵌套微变异，统一绑定宏观 EVENT ID，并动态分配唯一 Candidate ID"""
+        for k in range(len(nodes) - 1):
+            n1, n2 = nodes[k], nodes[k+1]
+            if n1.ref_name != n2.ref_name: 
+                continue 
+            
+            # 只注入全局宏观 EVENT
+            internal_cand = check_and_extract_linear_sv(
+                b1=n1, b2=n2, chrom=n1.ref_name, strand=n1.strand, 
+                source_label=source_label, isbackbone=False, 
+                extra_info={"EVENT": macro_event_id}
+            )
+            if not internal_cand:
+                continue
+
+            merge_key = next((_mk for _mk in nested_dict if internal_cand.raw_type == _mk[0] and abs(internal_cand.pos - _mk[1]) <= 10), None)
+            
+            if merge_key is None:
+                nest_idx = len(nested_dict)
+                # 为该嵌套变异分配唯一的 VCF ID
+                internal_cand.id = f"{macro_event_id}_NEST_{nest_idx}"
+                internal_cand.info["MERGED_BLOCKS"] = 1
+                nested_dict[(internal_cand.raw_type, internal_cand.pos)] = internal_cand
+            else:
+                existing = nested_dict[merge_key]
+                e_span = existing.q_end - existing.q_start
+                n_span = internal_cand.q_end - internal_cand.q_start
+                
+                is_same_detection = True
+                if e_span > 0 and n_span > 0:
+                    overlap = max(0, min(existing.q_end, internal_cand.q_end) - max(existing.q_start, internal_cand.q_start))
+                    shorter = max(1, min(e_span, n_span))
+                    is_same_detection = (overlap / shorter) > 0.5
+
+                if is_same_detection:
+                    if internal_cand.sv_len > existing.sv_len:
+                        existing.sv_len = internal_cand.sv_len
+                        for key in ["INS_LEN", "DEL_LEN", "SEQ", "END"]:
+                            if key in internal_cand.info: existing.info[key] = internal_cand.info[key]
+                        existing.end = internal_cand.end
+                else:
+                    existing.sv_len += internal_cand.sv_len
+                    existing.info["MERGED_BLOCKS"] = existing.info.get("MERGED_BLOCKS", 1) + 1
+                    existing.info["INS_LEN"] = existing.info.get("INS_LEN", 0) + internal_cand.info.get("INS_LEN", 0)
+                    existing.info["DEL_LEN"] = existing.info.get("DEL_LEN", 0) + internal_cand.info.get("DEL_LEN", 0)
+                    
+                    if internal_cand.info.get("SUBTYPE") == "DUP:TANDEM":
+                        existing.info["SUBTYPE"] = "MULTI_DUP:TANDEM"
+                    if "SEQ" in existing.info and "SEQ" in internal_cand.info:
+                        existing.info["SEQ"] += internal_cand.info["SEQ"]
+                    if "END" in internal_cand.info and "END" in existing.info:
+                        existing.info["END"] = max(existing.info["END"], internal_cand.info["END"])
+                    existing.q_end = max(existing.q_end, internal_cand.q_end)
+                    
+                    if "END" in existing.info:
+                        existing.end = int(existing.info["END"])
+                    elif existing.type in ("BND", "TRA"):
+                        existing.end = existing.pos
+                    elif existing.type == "INS":
+                        existing.end = existing.pos + int(existing.info.get("REPLACED_REF_LEN", 0))
+                    else:
+                        existing.end = existing.pos + existing.sv_len
+
+    # =======================================================================
+    # Edge Orphan Handling
+    # ======================================================================= 
+    def process_edge_orphans(bb_node: 'AlignedSegment', orphans: List['AlignedSegment'], is_head: bool):
+        if not orphans: return
+        
+        bb_pos = bb_node.ref_start if bb_node.strand == '+' else bb_node.ref_end
+        if not is_head:
+            bb_pos = bb_node.ref_end if bb_node.strand == '+' else bb_node.ref_start
+            
+        anchor_chr, anchor_strand = bb_node.ref_name, bb_node.strand
+        global_event_id = f"{read_name}_{'HEAD' if is_head else 'TAIL'}_EDGE"
+        
+        merged_clusters = condense_orphan_blocks(
+            orphans, anchor_chr=anchor_chr, anchor_strand=anchor_strand,
+            anchor_bp_left=bb_pos, anchor_bp_right=bb_pos
+        )
+        
+        nested_merged_dict = {}
+        _extract_and_merge_nested_nodes(orphans, "COMPLEX_EDGE", global_event_id, nested_merged_dict)
+        candidates.extend(nested_merged_dict.values())
+        
+        # 严格使用最大外包络物理跨度
+        total_ins_len = max(o.qe for o in orphans) - min(o.qs for o in orphans)
+        
+        sub_type_parts = []
+        for idx, m in enumerate(merged_clusters):
+            if len(merged_clusters) == 1 and m.strand != anchor_strand and m.ref_name == anchor_chr:
+                inv_span_len = m.ref_end - m.ref_start
+                TRA_GAP_MIN = getattr(SVConfig, 'MIN_TRA_SIZE', 50000)
+                TRA_RATIO_THRESHOLD = getattr(SVConfig, 'TRA_RATIO_THRESHOLD', 5.0)
+                raw_gap = abs(m.ref_start - bb_pos) if is_head else abs(bb_pos - m.ref_end)
+                
+                if raw_gap > TRA_GAP_MIN or raw_gap > inv_span_len * TRA_RATIO_THRESHOLD:
+                    m.subtype = m.subtype.replace("TANDEM", "DISP:INTRA")
+                else:
+                    m.subtype = "INV"
+            
+            sub_type_parts.append(m.subtype)
+            span_info = {
+                "EVENT": global_event_id, "CPLX_IDX": idx,
+                "SRCREG": f"{m.ref_name}:{m.ref_start}-{m.ref_end}",
+                "SOURCE": "COMPLEX_EDGE", "SUBTYPE": m.subtype,
+                "DEL_LEN": 0, "INS_LEN": m.true_q_len, "END": bb_pos
+            }
+            if m.is_fragmented:
+                span_info["FRAGS"] = ",".join(f"{s}-{e}" for s, e in m.sub_spans)
+            
+            span_cand = SVCandidate("CSV", anchor_chr, bb_pos, m.true_q_len, read_name, info=span_info, filter_str="EDGE_COMPLEX")
+            span_cand.id = f"{global_event_id}_SPAN_{idx}"
+            candidates.append(span_cand)
+            
+        eventtype = merged_clusters[0].subtype if len(merged_clusters) == 1 else "COMPLEX_" + "_".join(sub_type_parts)
+        
+        summary_cand = SVCandidate(
+            "CSV", anchor_chr, bb_pos, total_ins_len, read_name, 
+            info={"EVENT": global_event_id, "EVENTTYPE": eventtype, "SUBTYPE":"COMPLEX", "DEL_LEN": 0, "INS_LEN": total_ins_len, "ORPHAN_CLUSTERS": len(merged_clusters)}, 
+            filter_str="EDGE_COMPLEX"
+        )
+        summary_cand.id = f"{global_event_id}_SUMMARY"
+        candidates.append(summary_cand)
+
+        closest_orphan = orphans[-1] if is_head else orphans[0]
+        orphan_pos = closest_orphan.ref_end if closest_orphan.strand == '+' else closest_orphan.ref_start
+        if not is_head:
+            orphan_pos = closest_orphan.ref_start if closest_orphan.strand == '+' else closest_orphan.ref_end
+            
+        strands = (closest_orphan.strand + anchor_strand) if is_head else (anchor_strand + closest_orphan.strand)
+        tra_type = "INTER_CHR" if anchor_chr != closest_orphan.ref_name else "INTRA_CHR"
+        
+        c1 = SVCandidate("BND", anchor_chr, bb_pos, 0, read_name, info={
+            "EVENT": global_event_id, "CHR2": closest_orphan.ref_name, "POS2": orphan_pos, "TRA_TYPE": tra_type, "STRANDS": strands, "SOURCE": "COMPLEX_EDGE"
+        })
+        c2 = SVCandidate("BND", closest_orphan.ref_name, orphan_pos, 0, read_name, info={
+            "EVENT": global_event_id, "CHR2": anchor_chr, "POS2": bb_pos, "TRA_TYPE": tra_type, "STRANDS": strands[::-1], "SOURCE": "COMPLEX_EDGE"
+        })
+        
+        # 交叉互锁 MATEID
+        c1.id = f"{global_event_id}_BND2"
+        c2.id = f"{global_event_id}_BND1"
+        c1.mateid = c2.id
+        c2.mateid = c1.id
+        c1.info["MATEID"] = c1.mateid
+        c2.info["MATEID"] = c2.mateid
+        candidates.extend([c1, c2])
+
+    if main_idx[0] > 0:
+        process_edge_orphans(bb_node=chains[main_idx[0]], orphans=chains[:main_idx[0]], is_head=True)
+        
+    if main_idx[-1] < len(chains) - 1:
+        process_edge_orphans(bb_node=chains[main_idx[-1]], orphans=chains[main_idx[-1] + 1:], is_head=False)
+
+    # =======================================================================
+    # Main Chain Iteration
+    # =======================================================================
     for i in range(len(main_idx) - 1):
         idx_L, idx_R = main_idx[i], main_idx[i+1]
         bb_left, bb_right = chains[idx_L], chains[idx_R]
@@ -1233,154 +1066,209 @@ def resolve_chain_svs(chains: List[AlignedSegment], main_strand: str, main_idx_s
         
         orphans_in_between = chains[idx_L + 1 : idx_R]
         anchor_chr, anchor_strand = bb_left.ref_name, bb_left.strand
-        anchor_pos = bb_left.ref_end if anchor_strand == '+' else bb_left.ref_start
-        anchor_end = bb_right.ref_start if anchor_strand == '+' else bb_right.ref_end
+        anchor_bp_left  = bb_left.ref_end   if anchor_strand == '+' else bb_left.ref_start
+        anchor_bp_right = bb_right.ref_start if anchor_strand == '+' else bb_right.ref_end
+        anchor_pos, anchor_end = anchor_bp_left, anchor_bp_right
         dist_q = bb_right.qs - bb_left.qe
         dist_r = (bb_right.ref_start - bb_left.ref_end) if anchor_strand == '+' else (bb_left.ref_start - bb_right.ref_end)
-        
-        # =======================================================
-        # Scenario A: Presence of orphans (Complex/Jumping)
-        # =======================================================
+
         if orphans_in_between:
             clean_block_id += 1
-            merged_clusters = condense_orphan_blocks(orphans_in_between, anchor_chr, anchor_pos, anchor_strand)
+            merged_clusters = condense_orphan_blocks(
+                orphans_in_between, anchor_chr=anchor_chr, anchor_strand=anchor_strand,
+                anchor_bp_left=anchor_bp_left, anchor_bp_right=anchor_bp_right,
+            )
             
             complex_cluster_idx += 1 
-            event_id = f"{read_name}_CPLX_{complex_cluster_idx}"
+            global_event_id = f"{read_name}_CPLX_{complex_cluster_idx}"
             
-            # --- 【1. 单游离块：原生 INV 提纯逻辑】 ---
             if len(merged_clusters) == 1:
                 m = merged_clusters[0]
-                is_inv = (m["strand"] != anchor_strand)
-                is_same_chr = (m["ref_name"] == anchor_chr)
-                
+                is_inv = (m.strand != anchor_strand)
+                is_same_chr = (m.ref_name == anchor_chr)
+
                 if is_inv and is_same_chr:
-                    inv_start, inv_end = m["ref_start"], m["ref_end"]
+                    inv_start, inv_end = m.ref_start, m.ref_end
                     inv_span_len = inv_end - inv_start
-                    
+
                     if anchor_strand == '+':
                         pos_outer_left, pos_outer_right = bb_left.ref_end, bb_right.ref_start
-                        q_raw_left, q_raw_right = m["q_start"] - bb_left.qe, bb_right.qs - m["q_end"]
+                        q_raw_left, q_raw_right = m.q_start - bb_left.qe, bb_right.qs - m.q_end
                     else:
                         pos_outer_left, pos_outer_right = bb_right.ref_end, bb_left.ref_start
-                        q_raw_left, q_raw_right = bb_right.qs - m["q_end"], m["q_start"] - bb_left.qe
-                        
+                        q_raw_left, q_raw_right = bb_right.qs - m.q_end, m.q_start - bb_left.qe
+
                     raw_gap_left, raw_gap_right = inv_start - pos_outer_left, pos_outer_right - inv_end
                     delta_left, delta_right = q_raw_left - raw_gap_left, q_raw_right - raw_gap_right
-                    true_ins_left, true_del_left = max(0, delta_left), max(0, -delta_left)
-                    true_ins_right, true_del_right = max(0, delta_right), max(0, -delta_right)
+                    true_ins_left,  true_del_left  = max(0,  delta_left),  max(0, -delta_left)
+                    true_ins_right, true_del_right = max(0,  delta_right), max(0, -delta_right)
+                    total_span = pos_outer_right - pos_outer_left
                     
-                    TRA_GAP_MIN, TRA_RATIO_THRESHOLD = getattr(SVConfig, 'MIN_TRA_SIZE', 50000), getattr(SVConfig, 'TRA_RATIO_THRESHOLD', 5.0)
+                    TRA_GAP_MIN = getattr(SVConfig, 'MIN_TRA_SIZE', 50000)
+                    TRA_RATIO_THRESHOLD = getattr(SVConfig, 'TRA_RATIO_THRESHOLD', 5.0)
                     
-                    is_remote_inv = (abs(raw_gap_left) > TRA_GAP_MIN or abs(raw_gap_right) > TRA_GAP_MIN or 
-                                     abs(raw_gap_left) > inv_span_len * TRA_RATIO_THRESHOLD or abs(raw_gap_right) > inv_span_len * TRA_RATIO_THRESHOLD)
-                    
-                    if not is_remote_inv:
-                        info = {"INV_SPAN": int(inv_span_len), "LEFT_INS": int(q_raw_left), "RIGHT_INS": int(q_raw_right),
-                                "LEFT_DEL": int(raw_gap_left), "RIGHT_DEL": int(raw_gap_right)}
-                        is_del, is_ins = (true_del_left + true_del_right) > SVConfig.MIN_SV_SIZE, (true_ins_left + true_ins_right) > SVConfig.MIN_SV_SIZE
-                        
-                        if is_ins and is_del: info["SUBTYPE"] = "INV-INS-DEL"
-                        elif is_ins: info["SUBTYPE"] = "INV-INS"
-                        elif is_del: info["SUBTYPE"] = "INV-DEL"
-                        else: info["SUBTYPE"] = "INV"
-                        
-                        candidates.append(SVCandidate("INV", anchor_chr, inv_start, inv_span_len, read_name, info=info))
-                        continue 
+                    is_remote_inv = (
+                        abs(raw_gap_left)  > TRA_GAP_MIN or abs(raw_gap_right) > TRA_GAP_MIN or
+                        abs(raw_gap_left)  > inv_span_len * TRA_RATIO_THRESHOLD or
+                        abs(raw_gap_right) > inv_span_len * TRA_RATIO_THRESHOLD
+                    )
 
-            # --- 【2. 游离块网络统一提取 (修复了丢尾巴的 Bug)】 ---
-            # 建立连续网络，一次性提取所有精确的 DUP, INS, DEL 断点
+                    if is_remote_inv:
+                        m.subtype = m.subtype.replace("TANDEM", "DISP:INTRA")
+                    else:
+                        is_del = (true_del_left + true_del_right) > getattr(SVConfig, 'MIN_SV_SIZE', 30)
+                        is_ins = (true_ins_left + true_ins_right) > getattr(SVConfig, 'MIN_SV_SIZE', 30)
+
+                        if   is_ins and is_del: inv_subtype = "INV-INS-DEL"
+                        elif is_ins:            inv_subtype = "INV-INS"
+                        elif is_del:            inv_subtype = "INV-DEL"
+                        else:                   inv_subtype = "INV"
+
+                        info = {
+                            "EVENT":       global_event_id,
+                            "SUBTYPE":     inv_subtype,
+                            "INV_SPAN":    int(inv_span_len),
+                            "BP_DETAILS":  f"LC:{int(q_raw_left)},RC:{int(q_raw_right)},LF:{int(raw_gap_left)},RF:{int(raw_gap_right)}"
+                        }
+                        
+                        if inv_subtype == "INV":
+                            inv_cand = SVCandidate("INV", anchor_chr, inv_start, inv_span_len, read_name, info=info)
+                            inv_cand.id = f"{global_event_id}_INV"
+                            candidates.append(inv_cand)
+                        else:
+                            macro_ins_len = int(q_raw_left + inv_span_len + q_raw_right)
+                            info.update({"DEL_LEN": int(total_span), "INS_LEN": macro_ins_len, "END": int(pos_outer_right)})
+                            csv_cand = SVCandidate("CSV", anchor_chr, pos_outer_left, macro_ins_len, read_name, info=info)
+                            csv_cand.id = f"{global_event_id}_CSV"
+                            candidates.append(csv_cand)
+                        
+                        if len(m.blocks) > 1:
+                            nested_merged_dict = {}
+                            _extract_and_merge_nested_nodes(m.blocks, "COMPLEX", global_event_id, nested_merged_dict)
+                            candidates.extend(nested_merged_dict.values())
+                        continue
+                        
             nested_merged_dict = {}
             all_nodes = [bb_left] + orphans_in_between + [bb_right]
-            
-            for k in range(len(all_nodes) - 1):
-                n1, n2 = all_nodes[k], all_nodes[k+1]
-                # 跳过跨染色体交界，交给 BND 处理
-                if n1.ref_name != n2.ref_name: continue 
-                
-                internal_cand = check_and_extract_linear_sv(
-                    b1=n1, b2=n2, chrom=n1.ref_name, strand=n1.strand, 
-                    source_label="COMPLEX_NESTED", isbackbone=False,
-                    extra_info={"PEVENT": f"{event_id}_nested"}
-                )
-                
-                if internal_cand:
-                    merge_key = next((k for k in nested_merged_dict.keys() if internal_cand.raw_type == k[0] and abs(internal_cand.pos - k[1]) <= 10), None)
-                    if merge_key is None:
-                        internal_cand.info["MERGED_BLOCKS"] = 1
-                        nested_merged_dict[(internal_cand.raw_type, internal_cand.pos)] = internal_cand
-                    else:
-                        existing = nested_merged_dict[merge_key]
-                        existing.sv_len += internal_cand.sv_len
-                        if "SEQ" in existing.info and "SEQ" in internal_cand.info: existing.info["SEQ"] += internal_cand.info["SEQ"]
-                        if "REPLACED_REF_LEN" in internal_cand.info: existing.info["REPLACED_REF_LEN"] = existing.info.get("REPLACED_REF_LEN", 0) + internal_cand.info["REPLACED_REF_LEN"]
-                        existing.info["MERGED_BLOCKS"] = existing.info.get("MERGED_BLOCKS", 1) + 1
-                        existing.info["SUBTYPE"] = "MULTIPLE_DUP:TANDEM" if internal_cand.info.get("SUBTYPE") == "DUP:TANDEM" else "MERGED_INS"   
-            
+            _extract_and_merge_nested_nodes(all_nodes, "COMPLEX", global_event_id, nested_merged_dict)
             candidates.extend(nested_merged_dict.values())
 
-            # --- 【3. 宏观拓扑解析 (BND 及 Cluster 骨架)】 ---
-            sub_type_str = "COMPLEX"
+            sub_type_parts = []
             prev_chr, prev_strand, prev_pos = anchor_chr, anchor_strand, anchor_pos
-            
-            for idx, m in enumerate(merged_clusters):
-                sub_type_str += f"-{m['sv_type']}"
-                sub_event_id = f"{event_id}_sub{idx}"
-                
-                m_enter_pos = m["ref_start"] if m["strand"] == '+' else m["ref_end"]
-                m_leave_pos = m["ref_end"] if m["strand"] == '+' else m["ref_start"]
-                
-                is_translocation = (prev_chr != m["ref_name"])
-                is_distant_jump = (prev_chr == m["ref_name"] and abs(prev_pos - m_enter_pos) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000))
-                
-                if is_translocation or is_distant_jump:
-                    candidates.append(SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
-                        "PEVENT": event_id, "EVENT": f"{sub_event_id}_BND", "CHR2": m["ref_name"], "POS2": m_enter_pos, 
-                        "TRA_TYPE": "INTER_CHR" if is_translocation else "INTRA_CHR", "STRANDS": prev_strand + m["strand"]
-                    }))
 
-                prev_chr, prev_strand, prev_pos = m["ref_name"], m["strand"], m_leave_pos
+            for idx, m in enumerate(merged_clusters):
+                sub_type_parts.append(m.subtype)
+                m_enter_pos = m.ref_start if m.strand == '+' else m.ref_end
+                m_leave_pos = m.ref_end   if m.strand == '+' else m.ref_start
+
+                is_inter_chr     = (prev_chr != m.ref_name)
+                is_distant_intra = (not is_inter_chr and abs(prev_pos - m_enter_pos) > getattr(SVConfig, 'MIN_TRA_SIZE', 50_000))
+                is_distant_jump = is_inter_chr or is_distant_intra
+
+                bnd_entry = SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
+                    "EVENT": global_event_id, "CHR2": m.ref_name, "POS2": m_enter_pos,
+                    "TRA_TYPE": "INTER_CHR" if is_inter_chr else "INTRA_CHR", "STRANDS": prev_strand + m.strand, "SOURCE": "COMPLEX",
+                }, filter_str=None if is_distant_jump else "LOCAL_BND")
+                bnd_entry.id = f"{global_event_id}_BND_{idx}_ENTRY"
+                bnd_entry.mateid = f"{global_event_id}_BND_{idx}_EXIT"
+
+                bnd_exit = SVCandidate("BND", m.ref_name, m_enter_pos, 0, read_name, info={
+                    "EVENT": global_event_id, "CHR2": prev_chr, "POS2": prev_pos,
+                    "TRA_TYPE": "INTER_CHR" if is_inter_chr else "INTRA_CHR", "STRANDS": m.strand + prev_strand, "SOURCE": "COMPLEX",
+                }, filter_str=None if is_distant_jump else "LOCAL_BND")
+                bnd_exit.id = bnd_entry.mateid
+                bnd_exit.mateid = bnd_entry.id
+
+                bnd_entry.info["MATEID"] = bnd_entry.mateid
+                bnd_exit.info["MATEID"] = bnd_exit.mateid
+
+                candidates.extend([bnd_entry, bnd_exit])
+                prev_chr, prev_strand, prev_pos = m.ref_name, m.strand, m_leave_pos
                 
-                # ！！！核心防 FP 逻辑：如果是局部 DUP，静默过滤骨架生成（因为上方第2步已经精准报出了！）
-                span_type, span_len = m["sv_type"], m["ref_len"]
-                if span_type=="DUP:TANDEM":
-                    continue
-                
-                sub_info = {"PEVENT": event_id, "EVENT": sub_event_id, "SOURCE_CHR": m["ref_name"], "SOURCE_POS": m["ref_start"], "SOURCE_END": m["ref_end"], "DEST_CHR": prev_chr, "DEST_POS": prev_pos}
-                if span_type == "TRA": span_type, sub_info["SUBTYPE"] = "DUP", "TRA"  
-                elif span_type == "InvTRA": span_type, sub_info["SUBTYPE"] = "INV", "InvTRA" 
-                elif span_type == "InvDUP:TANDEM": 
-                    span_type, sub_info["SUBTYPE"] = "INV", "InvDUP:TANDEM"
-                candidates.append(SVCandidate(span_type, m["ref_name"], m["ref_start"], span_len, read_name, info=sub_info))
-               
+                # ── 基础 Span 记录构建（保留全部溯源标签） ──
+                span_info = {
+                    "EVENT": global_event_id, 
+                    "CPLX_IDX": idx,
+                    "SRCREG": f"{m.ref_name}:{m.ref_start}-{m.ref_end}",
+                    "SUBTYPE": m.subtype, 
+                    "DEL_LEN": 0, 
+                    "INS_LEN": m.true_q_len
+                }
+                if m.is_fragmented:
+                    span_info["FRAGS"] = ",".join(f"{s}-{e}" for s, e in m.sub_spans)
+                    
+                if m.subtype != "DUP:TANDEM":
+                    # 1. 局部保留 (LOCAL_RETAIN) 
+                    # 作用于主干边缘，但通过 FILTER=LOCAL_RETAIN 进行隔离，防止被误判为常规插入
+                    if m.subtype == "LOCAL_RETAIN":
+                        span_info["END"] = anchor_bp_left
+                        span_cand = SVCandidate("CSV", anchor_chr, anchor_bp_left, m.true_q_len, read_name, info=span_info, filter_str="LOCAL_RETAIN")
+                        span_cand.id = f"{global_event_id}_SPAN_{idx}"
+                        candidates.append(span_cand)
+                        
+                    # 2. 嵌套倒位 (INV) 
+                    # 必须使用其真实的参考基因组坐标 (m.ref_start) 和真实倒位跨度
+                    elif m.subtype == "INV":
+                        span_info["END"] = m.ref_end  # 倒位必须有明确的 END = POS + SVLEN
+                        inv_len = m.ref_end - m.ref_start
+                        # 坐标使用 m.ref_start，SVLEN 使用 inv_len
+                        span_cand = SVCandidate("INV", m.ref_name, m.ref_start, inv_len, read_name, info=span_info)
+                        span_cand.id = f"{global_event_id}_SPAN_{idx}"
+                        candidates.append(span_cand)
+                        
+                    # 3. 散在重复与其他复杂嵌套 (DUP:DISP 等)
+                    # 挂载在主干间隙边缘 (anchor_bp_left)
+                    else:
+                        span_info["END"] = anchor_bp_left
+                        span_cand = SVCandidate("CSV", anchor_chr, anchor_bp_left, m.true_q_len, read_name, info=span_info)
+                        span_cand.id = f"{global_event_id}_SPAN_{idx}"
+                        candidates.append(span_cand)
+    
             bb_right_enter = bb_right.ref_start if bb_right.strand == '+' else bb_right.ref_end
-            if prev_chr != bb_right.ref_name or (prev_chr == bb_right.ref_name and abs(prev_pos - bb_right_enter) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000)):
-                candidates.append(SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
-                    "PEVENT": event_id, "EVENT": f"{event_id}_tail_BND", "CHR2": bb_right.ref_name, "POS2": bb_right_enter,
-                    "TRA_TYPE": "INTER_CHR" if prev_chr != bb_right.ref_name else "INTRA_CHR", "STRANDS": prev_strand + bb_right.strand
-                }))
+            tail_inter     = (prev_chr != bb_right.ref_name)
+            tail_distant   = (not tail_inter and abs(prev_pos - bb_right_enter) > getattr(SVConfig, 'MIN_TRA_SIZE', 50_000))
+            
+            if tail_inter or tail_distant:
+                t1 = SVCandidate("BND", prev_chr, prev_pos, 0, read_name, info={
+                    "EVENT": global_event_id, "CHR2": bb_right.ref_name, "POS2": bb_right_enter,
+                    "TRA_TYPE": "INTER_CHR" if tail_inter else "INTRA_CHR", "STRANDS": prev_strand + bb_right.strand,
+                })
+                t1.id = f"{global_event_id}_TAIL_BND1"
+                t1.mateid = f"{global_event_id}_TAIL_BND2"
                 
+                t2 = SVCandidate("BND", bb_right.ref_name, bb_right_enter, 0, read_name, info={
+                    "EVENT": global_event_id, "CHR2": prev_chr, "POS2": prev_pos,
+                    "TRA_TYPE": "INTER_CHR" if tail_inter else "INTRA_CHR", "STRANDS": bb_right.strand + prev_strand,
+                })
+                t2.id = t1.mateid
+                t2.mateid = t1.id
+                
+                t1.info["MATEID"] = t1.mateid
+                t2.info["MATEID"] = t2.mateid
+                candidates.extend([t1, t2])
+            
             if len(merged_clusters) >= 2:
-                up_down = bool(anchor_pos > anchor_end)
-                strands_str = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
-                info_dict = {"EVENT": event_id, "SUBTYPE": sub_type_str, "REPLACED_QUERY_LEN": int(max(0, dist_q)), "ORPHAN_CLUSTERS": len(merged_clusters), "BACKBONE_STRAND": strands_str}
-                if up_down: info_dict["INV_BACKBONE"] = True
-                candidates.append(SVCandidate("COMPLEX", anchor_chr, anchor_end if up_down else anchor_pos, max(0, dist_r), read_name, info=info_dict))
-            
-        # =======================================================
-        # Scenario B: Clean Backbone Transition (Pure INS/DEL/INV)
-        # =======================================================
+                up_down      = bool(anchor_pos > anchor_end)
+                affected_ref = abs(dist_r)
+                strands_str  = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
+                eventtype    = (merged_clusters[0].subtype if len(merged_clusters) == 1 else "COMPLEX_" + "_".join(sub_type_parts))
+                summary_pos  = anchor_end if up_down else anchor_pos
+                summary_end  = summary_pos + affected_ref
+                
+                summary_info = {
+                    "EVENT": global_event_id, "EVENTTYPE": eventtype, "SUBTYPE": "COMPLEX",
+                    "DEL_LEN": int(affected_ref), "INS_LEN": int(max(0, dist_q)), "END": int(summary_end),
+                    "ORPHAN_CLUSTERS": len(merged_clusters), "BACKBONE_STRAND": strands_str, "BACKBONE_FLIP": up_down,
+                }
+                
+                summary_cand = SVCandidate("CSV", anchor_chr, summary_pos, max(0, dist_q), read_name, info=summary_info, filter_str="COMPLEX")
+                summary_cand.id = f"{global_event_id}_SUMMARY"
+                candidates.append(summary_cand)
+               
         else:
-            if bb_right.strand != bb_left.strand:
-                orient = "3to3" if bb_left.strand == '+' else "5to5"
-                exit_pos = bb_left.ref_end if bb_left.strand == '+' else bb_left.ref_start
-                enter_pos = bb_right.ref_start if bb_right.strand == '+' else bb_right.ref_end
-                bp_signals.append({"type": orient, "chrom": anchor_chr, "pos1": exit_pos, "pos2": enter_pos, "strand_L": bb_left.strand, "strand_R": bb_right.strand, "dist_q": dist_q, "clean_id": clean_block_id, "read_name": read_name})
-                continue
-            
-            backbone_cand = check_and_extract_linear_sv(b1=bb_left, b2=bb_right, chrom=anchor_chr, strand=anchor_strand, source_label="backbone")
+            backbone_cand = check_and_extract_linear_sv(
+                b1=bb_left, b2=bb_right, chrom=anchor_chr, strand=anchor_strand, source_label="backbone"
+            )
             if backbone_cand: candidates.append(backbone_cand)
-        
-    if bp_signals: candidates.extend(pair_inv_signals(bp_signals, read_name, main_strand))
-    print("is",end='\t')
+
     return candidates

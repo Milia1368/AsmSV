@@ -17,12 +17,16 @@ class SVCandidate:
     Data structure representing an identified Structural Variant Candidate.
     """
     __slots__ = (
-        'raw_type', 'type', 'chrom', 'pos', 'sv_len', 'read_names', 'info', 
-        'filter', 'sources', 'genotype', 'end'
+        'raw_type', 'type', 'chrom', 'pos', 'sv_len', 'read_names', 'info',
+        'filter', 'sources', 'genotype', 'end',
+        'q_start', 'q_end', 'mateid', 'id'
     )
     def __init__(self, sv_type: str, chrom: str, pos: int, sv_len: int, 
-                 read_name: Union[str, Set[str], List[str]], info: Dict = None, end: int = None):
-        self.info = info or {}
+                 read_name: Union[str, Set[str], List[str]], info: Dict = None, end: int = None, filter_str: str=None):
+        _base = {}   
+        if info:
+            _base.update(info)
+        self.info = _base
         self.raw_type = sv_type 
         self.type = self._normalize_type(sv_type)
         
@@ -40,9 +44,13 @@ class SVCandidate:
             else:
                 self.read_names.update(read_name) 
         
-        self.filter = "PASS"  if self.type!="COMPLEX" else "COMPLEX"
+        self.filter = filter_str if filter_str else "PASS"
         self.sources: Set[str] = set()
         self.genotype = "./."
+        self.q_start: int = 0   # query 上的近似起点（用于去重判断）
+        self.q_end:   int = 0   # query 上的近似终点
+        self.mateid:  str = ""  # BND 配对记录的 EVENT ID
+        self.id:      str = ""  # 预分配的 VCF ID；空字符串 = to_vcf_record 按类型计数器自动生成
         
         # ==========================================
         # [修改点 1]: 增强 END 坐标的自动推算能力
@@ -51,36 +59,35 @@ class SVCandidate:
             self.end = int(end)
         elif "END" in self.info:
             # 优先从上游提取逻辑中设置的 info["END"] 获取
-            self.end = int(self.info["END"])
+            self.end = int(self.info["END"]) 
         else:
             if self.type in ("BND", "TRA"):
                 self.end = self.pos
             elif self.type == "INS":
                 self.end = self.pos + int(self.info.get("REPLACED_REF_LEN", 0))
-            elif self.type == "CSV":
+            # elif self.type == "CSV":
                 # CSV 的物理跨度本质上就是 Reference 被替换掉的长度 (DEL_LEN)
-                self.end = self.pos + int(self.info.get("DEL_LEN", 0))
+                # self.end = self.pos + int(self.info.get("DEL_LEN", 0))
+
             else:
                 self.end = self.pos + self.sv_len 
 
     @staticmethod
     def _normalize_type(raw_type: str) -> str:
         rt = raw_type.upper()
-        # ==========================================
-        # [修改点 2]: 注册 CSV 变异类型
-        # ==========================================
         if "CSV" in rt: return "CSV"
-        if "COMPLEX" in rt or "RPL" in rt: return "COMPLEX"
-        if "TRA" in rt: return "TRA" 
+        if "DUP" in rt: return "DUP"
+        if "Inv" in rt: return "INV"
+        if "INV" in rt: return "INV"
+        if "TRA" in rt: return "TRA"
         if "INS" in rt: return "INS"
         if "DEL" in rt: return "DEL"
-        if "DUP" in rt: return "DUP"
-        if "INV" in rt: return "INV"
+
         return "BND"
 
     def to_vcf_record(self, sv_id_index: int, alt_allele: bool = True, reference = None) -> Tuple:
         """Transforms candidate data into a VCF-compliant tuple record."""
-        sv_id = f"SV.{self.type}.{sv_id_index:06d}"
+        sv_id = self.id if self.id else f"SV.{self.type}.{sv_id_index:06d}"
         
         anchor_base = self._safe_fetch_ref(reference, self.chrom, max(0, self.pos - 1), self.pos) if reference else "N"
         ref_val = anchor_base
@@ -116,14 +123,17 @@ class SVCandidate:
                         alt_val = "<DEL>"
                 else:
                     alt_val = "<DEL>"
-            # ==========================================
-            # [修改点 3]: 将 CSV 纳入默认打标签列表
-            # ==========================================
-            elif self.type in ("DUP", "INV", "COMPLEX", "TRA", "CSV"):
+            elif self.type in ("DUP", "INV", "TRA", "CSV"):
                  alt_val = f"<{self.raw_type}>"
                  
+        if self.mateid:
+            info_list.append(f"MATEID={self.mateid}")
+
         if self.read_names:
             self.info["RNAMES"] = ",".join(sorted(self.read_names))
+
+        if self.type=="CSV" and self.info["SUBTYPE"] =="INS_DEL":
+            info_list.append(f"SEQ={self.info['SEQ']}")
 
         exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE"}
         for k, v in self.info.items():
@@ -132,56 +142,11 @@ class SVCandidate:
                     info_list.append(f"{k}={v:.3f}")
                 else:
                     info_list.append(f"{k}={v}")
-       
         return (
-            self.chrom, str(self.pos), sv_id, ref_val, alt_val, ".", 
+            self.chrom, str(self.pos), sv_id, ref_val, alt_val, ".",
             self.filter, ";".join(info_list), "GT", self.genotype
         )
-    # def __init__(self, sv_type: str, chrom: str, pos: int, sv_len: int, 
-    #              read_name: Union[str, Set[str], List[str]], info: Dict = None, end: int = None):
-    #     self.info = info or {}
-    #     self.raw_type = sv_type 
-    #     self.type = self._normalize_type(sv_type)
-        
-    #     if self.raw_type != self.type and "SUBTYPE" not in self.info:
-    #         self.info["SUBTYPE"] = self.raw_type
-        
-    #     self.chrom = chrom
-    #     self.pos = int(pos)
-    #     self.sv_len = abs(int(sv_len))
-    #     self.read_names = set()
-        
-    #     if read_name:
-    #         if isinstance(read_name, str):
-    #             self.read_names.add(read_name) 
-    #         else:
-    #             self.read_names.update(read_name) 
-        
-    #     self.filter = "PASS"  
-    #     self.sources: Set[str] = set()
-    #     self.genotype = "./."
-        
-    #     # Determine END coordinate securely
-    #     if end is not None:
-    #         self.end = int(end)
-    #     else:
-    #         if self.type in ("BND", "TRA"):
-    #             self.end = self.pos
-    #         elif self.type in ("INS"):
-    #             self.end = self.pos + int(self.info.get("REPLACED_REF_LEN", 0))
-    #         else:
-    #             self.end = self.pos + self.sv_len 
 
-    # @staticmethod
-    # def _normalize_type(raw_type: str) -> str:
-    #     rt = raw_type.upper()
-    #     if "COMPLEX" in rt or "RPL" in rt: return "COMPLEX"
-    #     if "TRA" in rt: return "TRA" 
-    #     if "INS" in rt: return "INS"
-    #     if "DEL" in rt: return "DEL"
-    #     if "DUP" in rt: return "DUP"
-    #     if "INV" in rt: return "INV"
-    #     return "BND"
 
     def _format_bnd_alt(self, ref_base: str) -> str:
         """Generates VCF 4.2 compliant BND ALT strings."""
@@ -214,63 +179,6 @@ class SVCandidate:
             except (KeyError, ValueError):
                 return "N"
 
-    def to_vcf_record1(self, sv_id_index: int, alt_allele: bool = True, reference = None) -> Tuple:
-        """Transforms candidate data into a VCF-compliant tuple record."""
-        sv_id = f"SV.{self.type}.{sv_id_index:06d}"
-        
-        anchor_base = self._safe_fetch_ref(reference, self.chrom, max(0, self.pos - 1), self.pos) if reference else "N"
-        ref_val = anchor_base
-        alt_val = f"<{self.type}>"
-        
-        info_list = [f"SVTYPE={self.type}", f"END={self.end}"]
-        
-        # TRAs and BNDs lack a standard SVLEN dimension
-        if self.type not in ("BND", "TRA"):
-            val = -self.sv_len if self.type == "DEL" else self.sv_len
-            info_list.append(f"SVLEN={val}")
-
-        if self.type == "BND":
-            alt_val = self._format_bnd_alt(anchor_base)
-            
-        if self.type in ("BND", "TRA"):
-            if "CHR2" in self.info: info_list.append(f"CHR2={self.info['CHR2']}")
-            if "POS2" in self.info: info_list.append(f"POS2={self.info['POS2']}")
-            
-        elif alt_allele:
-            max_allele_len = SVConfig.MAX_ALLELE_LEN
-            is_large_sv = self.sv_len >= max_allele_len
-            
-            if self.type == "INS":
-                ins_seq = self.info.get("SEQ", "")
-                alt_val = anchor_base + ins_seq if ins_seq else "<INS>" 
-            elif self.type == "DEL":
-                if reference and not is_large_sv:
-                    deleted_seq = self._safe_fetch_ref(reference, self.chrom, self.pos, self.end)
-                    if len(deleted_seq) == self.sv_len:
-                        ref_val = anchor_base + deleted_seq
-                        alt_val = anchor_base
-                    else:
-                        alt_val = "<DEL>"
-                else:
-                    alt_val = "<DEL>"
-            elif self.type in ("DUP", "INV", "COMPLEX", "TRA"):
-                 alt_val = f"<{self.raw_type}>"
-                 
-        if self.read_names:
-            self.info["RNAMES"] = ",".join(sorted(self.read_names))
-
-        exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE"}
-        for k, v in self.info.items():
-            if k not in exclude and v is not None and v != "":
-                if isinstance(v, float):
-                    info_list.append(f"{k}={v:.3f}")
-                else:
-                    info_list.append(f"{k}={v}")
-       
-        return (
-            self.chrom, str(self.pos), sv_id, ref_val, alt_val, ".", 
-            self.filter, ";".join(info_list), "GT", self.genotype
-        )
 
 # ==============================================================================
 # Region Filtering Utilities

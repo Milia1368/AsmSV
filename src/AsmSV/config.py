@@ -43,3 +43,23 @@ class SVConfig:
     TRA_RATIO_THRESHOLD = 5.0       # Distance ratio threshold for evaluating translocations/inversions
     ENABLE_DENSITY_FILTER = False   # Enable high-density noise filtering for false positives
     ENABLE_SPLIT_SEGMENTS = False   # Enable segment splitting/refinement before DP chaining
+
+    # ================= Tandem / Dispersed Duplication Classification =================
+    # 真正的 tandem dup 拷贝紧贴或重叠源位点（通常 ≤ 500 bp）
+    # 原 condense_orphan_blocks 用 max_ref_dist=100000，分类过于宽泛
+    TANDEM_MAX_REF_DIST: int = 500
+
+    # 近端散在重复（PROXIMAL）：距 gap 500 bp~10 kb，机制不确定，单独标注
+    PROXIMAL_MAX_REF_DIST: int = 10_000
+
+    # DUP:TANDEM 的 INS/DUP SVTYPE 长度分界（参考 Manta 惯例）
+    # 短拷贝（< 1 kb）→ INS；长拷贝（≥ 1 kb）→ DUP
+    TANDEM_DUP_INS_THRESHOLD: int = 1_000
+
+    # pair_inv_signals 中 InvDUP:TANDEM 判定所需的最小 backbone 倒退量
+    # 原用 MIN_SV_SIZE（30-50 bp），噪声引起的误判；改为 200 bp
+    MIN_INVDUP_TANDEM_BACK: int = 200
+    #----backbone---
+    BB_OVERLAP_MIN_BASE=200
+    BB_OVERLAP_MAX_CEILING=5000
+    BB_OVERLAP_RATIO_THRES=0.5

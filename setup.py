@@ -12,7 +12,7 @@ else:
 
 setup(
     name="AsmSV",
-    version="1.1.1",
+    version="1.2.1",
     description="A structural variant (SV) detection tool for genome assembly contigs, supporting analysis of complex structural variants.",
     long_description=long_description,
     long_description_content_type='text/markdown',

@@ -9,6 +9,7 @@ __pycache__/
 # 2. 你的项目中需要过滤的打包产物
 # =========================
 # 过滤打包时生成的 build 和 dist 文件夹
+temp/
 build/
 dist/
 example/*.p[n|d][g|f]
