@@ -43,7 +43,7 @@ AsmSV is designed around a **Backbone–Branch strategy**: a dynamic-programming
 ### Install from source
 
 ```bash
-git clone [https://github.com/Milia1368/AsmSV.git](https://github.com/Milia1368/AsmSV.git)
+git clone https://github.com/Milia1368/AsmSV.git
 cd AsmSV
 pip install -e .
 ```
@@ -301,10 +301,8 @@ Phased genotypes are output in the `GT` FORMAT field:
 
 ```
 AsmSV/
-  example/
-  ├──
-  └──
-  src/
+├── example/
+├──src/
   ├──__init__.py  
   ├── asmSV.py        # Main pipeline: parallel dispatch, BAM I/O, serialization
   ├── bam_info.py     # Core: AlignedSegment, DP chaining, backbone, SV extraction
@@ -351,37 +349,7 @@ The global score additionally penalizes unmapped query regions at both ends.
 
 ## Examples
 
-### Higher sensitivity
-
-```bash
-asmSV --bam1 h1.bam --bam2 h2.bam --ref ref.fa -o out.vcf \
-  --min-sv 50 --cluster-pos-tol 50 --min-seq-sim 0.9
-```
-
-### Noisy sample with density filter
-
-```bash
-asmSV --bam1 h1.bam --bam2 h2.bam --ref ref.fa -o out.vcf \
-  --enable-density-filter --density-window 2000 --max-sv-in-window 5
-```
-
-### Region masking + segment splitting
-
-```bash
-asmSV --bam1 h1.bam --bam2 h2.bam --ref ref.fa -o out.vcf \
-  --mask repeats.bed --split-segments
-```
-
----
-
-## Python API
-
-```python
-from AsmSV import SVCandidate, BedMaskFilter   # Data structures
-from AsmSV import SVConfig                     # Configuration
-from AsmSV import cluster_and_genotype         # Clustering & genotyping
-from AsmSV import write_vcf, parseArgs         # I/O utilities
-```
+#图片
 
 ---
 
