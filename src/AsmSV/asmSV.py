@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import glob
 import uuid
 import time
 import shutil
@@ -189,58 +190,107 @@ def bam_generator(bam_path: str):
             if serialized_reads:
                 yield qname, serialized_reads, query_seq, query_len
 
-def sort_bam_by_name(input_bam: str, threads: int = 4, reuse_sorted: bool = True) -> Tuple[str, bool]:
-    """Sorts the BAM file by query name."""
-    sorted_bam = input_bam.replace(".bam", ".qsort.bam")
-
-    if reuse_sorted and os.path.exists(sorted_bam):
-        try:
-            if os.path.getmtime(sorted_bam) >= os.path.getmtime(input_bam):
-                with pysam.AlignmentFile(sorted_bam, "rb") as bam:
-                    _ = bam.header  
-                logger.info(f"Reusing qsort BAM: {sorted_bam}")
-                return sorted_bam, False
-        except Exception:
-            pass
-
-    logger.info(f"Checking integrity of input BAM: {input_bam}")
-
+def _check_bam_integrity(bam_path: str) -> bool:
+    """
+    Validates a BAM file's integrity.
+    Uses samtools quickcheck when available (checks EOF block).
+    Falls back to pysam header + limited record scan when samtools is absent.
+    """
     if shutil.which("samtools"):
-        check_result = subprocess.run(
-            ["samtools", "quickcheck", "-v", input_bam],
+        result = subprocess.run(
+            ["samtools", "quickcheck", bam_path],
             capture_output=True, text=True,
         )
-        if check_result.returncode != 0:
-            logger.error(f"INPUT FILE CORRUPTED: The file {input_bam} is truncated or damaged!")
-            logger.error(f"Reason: {check_result.stdout.strip() or check_result.stderr.strip()}")
-            raise ValueError(f"Corrupted input BAM file: {input_bam}")
-    else:
-        logger.warning("samtools not found in PATH, skipping BAM integrity check.")
+        if result.returncode != 0:
+            detail = (result.stderr.strip() or result.stdout.strip())
+            if detail:
+                logger.debug(f"quickcheck detail for {bam_path}: {detail}")
+        return result.returncode == 0
+    # samtools absent — open with pysam and scan a small window of records
+    try:
+        with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
+            _ = bam.header
+            for i, _ in enumerate(bam.fetch(until_eof=True)):
+                if i >= 200:
+                    break
+        return True
+    except Exception:
+        return False
 
-    file_size_gb = os.path.getsize(input_bam) / (1024 ** 3)
-    # if file_size_gb < 1.0:
-    #     logger.warning(f"WARNING: The input BAM file is unusually small ({file_size_gb:.2f} GB).")
 
-    if os.path.exists(sorted_bam):
-        try: os.remove(sorted_bam)
-        except OSError: pass
-            
-    # Clean up invalid indices
+def sort_bam_by_name(input_bam: str, threads: int = 4,
+                     reuse_sorted: bool = True,
+                     force_resort: bool = False) -> Tuple[str, bool]:
+    """
+    Sorts a BAM file by query name with integrity guards and atomic output.
+
+    Reuse path  : if qsort.bam exists, is newer than input, AND passes quickcheck → reuse.
+                  If quickcheck fails → auto-rebuild (no silent corruption).
+    Sort path   : writes to a temp file first, quickchecks it, then renames atomically.
+                  A crash during sort never leaves a corrupt qsort.bam on disk.
+    force_resort: skip the reuse check entirely and always rebuild.
+
+    Returns (sorted_bam_path, created_now).
+    """
+    sorted_bam = input_bam.replace(".bam", ".qsort.bam")
+
+    # ── Reuse check ──────────────────────────────────────────────────────────
+    if reuse_sorted and not force_resort and os.path.exists(sorted_bam):
+        try:
+            if os.path.getmtime(sorted_bam) >= os.path.getmtime(input_bam):
+                if _check_bam_integrity(sorted_bam):
+                    logger.info(f"Reusing valid qsort BAM: {sorted_bam}")
+                    return sorted_bam, False
+                else:
+                    logger.warning(
+                        f"Existing qsort BAM failed integrity check, will rebuild: {sorted_bam}"
+                    )
+            else:
+                logger.info(f"Input BAM is newer than qsort BAM — resorting.")
+        except OSError:
+            pass  # fall through to rebuild
+
+    if force_resort:
+        logger.info(f"--force-resort requested, rebuilding: {sorted_bam}")
+
+    # ── Input BAM integrity check ────────────────────────────────────────────
+    logger.info(f"Checking integrity of input BAM: {input_bam}")
+    if not _check_bam_integrity(input_bam):
+        raise ValueError(
+            f"Input BAM failed integrity check (truncated or corrupted): {input_bam}"
+        )
+
+    # ── Clean up stale index files for the target path ───────────────────────
     for ext in (".bai", ".csi"):
-        idx_path = sorted_bam + ext
-        if os.path.exists(idx_path):
-            try: os.remove(idx_path)
+        idx = sorted_bam + ext
+        if os.path.exists(idx):
+            try: os.remove(idx)
             except OSError: pass
 
-    temp_prefix = sorted_bam + ".tmp." + str(uuid.uuid4().hex[:8])
-    logger.info(f"Sorting BAM by query name: {input_bam} -> {sorted_bam}")
+    # ── Atomic sort: write to temp → quickcheck → rename ────────────────────
+    uid = uuid.uuid4().hex[:8]
+    temp_sort_out = sorted_bam + f".tmp.{uid}.bam"
+    temp_prefix   = sorted_bam + f".sortprefix.{uid}"
 
+    logger.info(f"Sorting BAM by query name: {input_bam} -> {sorted_bam}")
     try:
-        pysam.sort("-n", "-@", str(threads), "-o", sorted_bam, "-T", temp_prefix, input_bam)
-    except Exception as e:
-        logger.error(f"Sorting failed: {e}")
+        pysam.sort("-n", "-@", str(threads), "-o", temp_sort_out, "-T", temp_prefix, input_bam)
+
+        if not _check_bam_integrity(temp_sort_out):
+            raise RuntimeError(
+                f"Sort output failed integrity check (possible disk/OOM issue): {temp_sort_out}"
+            )
+
+        # Commit atomically: remove old file first so rename never fails on Windows
         if os.path.exists(sorted_bam):
             os.remove(sorted_bam)
+        os.rename(temp_sort_out, sorted_bam)
+
+    except Exception as e:
+        logger.error(f"Sorting failed: {e}")
+        for path in [temp_sort_out] + glob.glob(temp_prefix + "*.bam"):
+            try: os.remove(path)
+            except OSError: pass
         raise
 
     return sorted_bam, True
@@ -249,7 +299,9 @@ def sort_bam_by_name(input_bam: str, threads: int = 4, reuse_sorted: bool = True
 # Core Parallel Execution Pipeline
 # ==============================================================================
 def main_pipeline(bam_path: str, label: str, mask_filter: BedMaskFilter,
-                  threads: int = 8, presorted_bam: Optional[str] = None) -> Tuple[List[SVCandidate], Dict]:
+                  threads: int = 8, presorted_bam: Optional[str] = None,
+                  retain_files: bool = True,
+                  force_resort: bool = False) -> Tuple[List[SVCandidate], Dict]:
     """Manages multiprocessing execution for processing SVs from a BAM file."""
     header_dict = {}
     header_source = presorted_bam if presorted_bam else bam_path
@@ -265,7 +317,9 @@ def main_pipeline(bam_path: str, label: str, mask_filter: BedMaskFilter,
         qsort_bam, created_now = presorted_bam, False
         logger.info(f"Using pre-sorted BAM: {qsort_bam}")
     else:
-        qsort_bam, created_now = sort_bam_by_name(bam_path, threads=threads, reuse_sorted=True)
+        qsort_bam, created_now = sort_bam_by_name(
+            bam_path, threads=threads, reuse_sorted=True, force_resort=force_resort
+        )
     
     # Configure process pool and control IPC throughput
     executor = ProcessPoolExecutor(max_workers=threads)
@@ -306,10 +360,13 @@ def main_pipeline(bam_path: str, label: str, mask_filter: BedMaskFilter,
 
     finally:
         executor.shutdown(wait=True)
-        # Only delete qsort.bam if it was generated during this execution
-        if created_now and qsort_bam != bam_path and os.path.exists(qsort_bam):
-            try: os.remove(qsort_bam)
+        if created_now and not retain_files and qsort_bam != bam_path and os.path.exists(qsort_bam):
+            try:
+                os.remove(qsort_bam)
+                logger.info(f"Removed intermediate sorted BAM: {qsort_bam}")
             except OSError: pass
+        elif created_now and retain_files:
+            logger.info(f"Retaining sorted BAM for reuse: {qsort_bam}")
 
     if mask_filter and mask_filter.is_active:
         all_svs = filter_candidates_by_mask(all_svs, mask_filter)
@@ -342,6 +399,8 @@ def main_ctrl(args, argv):
     logger.info(f" - Min MapQ        : {SVConfig.MIN_MAPQ}")
     logger.info(f" - Min TRA Size    : {SVConfig.MIN_TRA_SIZE}")
     logger.info(f" - Density Filter  : {'Enabled' if SVConfig.ENABLE_DENSITY_FILTER else 'Disabled'}")
+    logger.info(f" - Retain sorted   : {args.retain_sorted}")
+    logger.info(f" - Force resort    : {getattr(args, 'force_resort', False)}")
     logger.info(f" - Input Ref       : {args.ref}")
     logger.info(f" - Input Hap1 BAM  : {args.bam1}")
     logger.info(f" - Input Hap2 BAM  : {args.bam2}")
@@ -375,10 +434,15 @@ def main_ctrl(args, argv):
     
     try:
         # Process haplotypes concurrently
+        force_resort = getattr(args, 'force_resort', False)
         svs_h1, header_dict = main_pipeline(args.bam1, "hap1", mask_filter, args.threads,
-                                             presorted_bam=args.sorted_bam1)
+                                             presorted_bam=args.sorted_bam1,
+                                             retain_files=args.retain_sorted,
+                                             force_resort=force_resort)
         svs_h2, _ = main_pipeline(args.bam2, "hap2", mask_filter, args.threads,
-                                   presorted_bam=args.sorted_bam2)
+                                   presorted_bam=args.sorted_bam2,
+                                   retain_files=args.retain_sorted,
+                                   force_resort=force_resort)
 
         logger.info(">>> Global Clustering and Genotyping...")
         final_svs = cluster_and_genotype(svs_h1, svs_h2)
@@ -424,7 +488,7 @@ def run(argv):
 
 def main():
     """Parameterless entry point for setuptools console_scripts."""
-    sys.exit(run(sys.argv[1:]))
+    sys.exit(run(sys.argv[1:]))   
 
 if __name__ == '__main__':
     main()

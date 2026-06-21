@@ -107,14 +107,15 @@ class SVCandidate:
             if "POS2" in self.info: info_list.append(f"POS2={self.info['POS2']}")
             
         elif alt_allele:
-            max_allele_len = SVConfig.MAX_ALLELE_LEN
-            is_large_sv = self.sv_len >= max_allele_len
-            
+            # ENABLE_LARGE_SEQUENCE=True → always write full sequence
+            # ENABLE_LARGE_SEQUENCE=False (default) → sequences >= MAX_ALLELE_LEN use symbolic alleles
+            use_full_seq = SVConfig.ENABLE_LARGE_SEQUENCE or (self.sv_len < SVConfig.MAX_ALLELE_LEN)
+
             if self.type == "INS":
                 ins_seq = self.info.get("SEQ", "")
-                alt_val = anchor_base + ins_seq if ins_seq else "<INS>" 
+                alt_val = (anchor_base + ins_seq) if (ins_seq and use_full_seq) else "<INS>"
             elif self.type == "DEL":
-                if reference and not is_large_sv:
+                if reference and use_full_seq:
                     deleted_seq = self._safe_fetch_ref(reference, self.chrom, self.pos, self.end)
                     if len(deleted_seq) == self.sv_len:
                         ref_val = anchor_base + deleted_seq
@@ -124,7 +125,7 @@ class SVCandidate:
                 else:
                     alt_val = "<DEL>"
             elif self.type in ("DUP", "INV", "TRA", "CSV"):
-                 alt_val = f"<{self.raw_type}>"
+                alt_val = f"<{self.raw_type}>"
                  
         if self.mateid:
             info_list.append(f"MATEID={self.mateid}")
@@ -132,7 +133,7 @@ class SVCandidate:
         if self.read_names:
             self.info["RNAMES"] = ",".join(sorted(self.read_names))
 
-        if self.type=="CSV" and self.info["SUBTYPE"] =="INS_DEL":
+        if self.type=="CSV" and self.raw_type=="INS_DEL":
             info_list.append(f"SEQ={self.info['SEQ']}")
 
         exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE"}

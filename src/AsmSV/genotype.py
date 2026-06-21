@@ -23,7 +23,7 @@ def calculate_seq_similarity(seq1: str, seq2: str) -> float:
     len1, len2 = len(seq1), len(seq2)
 
     # Mechanism 1: Flank Trimming (mitigates wobble in tandem repeats)
-    trim_len = 3 
+    trim_len = 2 
     if len1 > 3 * trim_len and len2 > 3 * trim_len:
         seq1_core = seq1[trim_len:-trim_len]
         seq2_core = seq2[trim_len:-trim_len]
@@ -74,7 +74,6 @@ def _match_ins_sv(s1: SVCandidate, s2: SVCandidate) -> bool:
     """
     if s1.chrom != s2.chrom: 
         return False
-    
     if abs(s1.pos - s2.pos) > SVConfig.CLUSTER_POS_TOL:
         return False
 
@@ -331,7 +330,7 @@ def cluster_and_genotype(hap1_svs: List[SVCandidate], hap2_svs: List[SVCandidate
     CSV_INS_DEL_TYPES = {"INS_DEL", "INV-INS", "INV-DEL", "INV-INS-DEL"}
     CSV_SPAN_TYPES = {
         "InvDUP:TANDEM", "InvDUP:PROXIMAL", "InvDUP:DISP:INTRA", "InvDUP:DISP:INTER",
-        "DUP:PROXIMAL", "DUP:DISP:INTRA", "DUP:DISP:INTER",
+        "DUP:PROXIMAL", "DUP:DISP:INTRA", "DUP:DISP:INTER","InvDUP"
     }
 
     for sv_type in sorted(CSV_INS_DEL_TYPES | CSV_SPAN_TYPES):

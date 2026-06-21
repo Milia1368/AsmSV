@@ -41,42 +41,57 @@ def parseArgs(argv: List[str]) -> argparse.Namespace:
     io_group.add_argument("--mask", metavar="FILE", default=None,
                           help="BED file of regions to exclude from output. [Default: None]")
     io_group.add_argument("--sorted-bam1", metavar="FILE", default=None,
-                          help="Pre-sorted (queryname order) BAM for Hap1. Skips the sort step entirely.")
+                          help="Pre-sorted (queryname order) BAM for Hap1. Skips the sort step entirely.\n"
+                               "When provided the file is never deleted regardless of --no-retain-sorted.")
     io_group.add_argument("--sorted-bam2", metavar="FILE", default=None,
-                          help="Pre-sorted (queryname order) BAM for Hap2. Skips the sort step entirely.")
+                          help="Pre-sorted (queryname order) BAM for Hap2. Skips the sort step entirely.\n"
+                               "When provided the file is never deleted regardless of --no-retain-sorted.")
     
     # === Group 2: VCF Format Options ===
     fmt_group = parser.add_argument_group("VCF Format Options")
-    fmt_group.add_argument("--max-alleles-len", type=int, default=5000, metavar="INT",
-                           help="Maximum sequence length to write in ALT column.\n"
-                                "SVs longer than this will use symbolic alleles (e.g. <DEL>).[Default: 5000]")
-    # Logic: Symbolic alleles are enabled by default. '--no-symbolic' disables it.
-    fmt_group.add_argument("--no-symbolic", dest="symbolic_alleles", action='store_false',
-                           help="Disable symbolic alleles (e.g. <DEL>) entirely and force sequence output.\n"
-                                "WARNING: This may create huge VCF files.")
-    parser.set_defaults(symbolic_alleles=True)
+    fmt_group.add_argument(
+                        "--enable-large-sequence",
+                        dest="enable_large_sequence",
+                        action="store_true",
+                        help=f"""Always write full inserted/deleted sequences in the VCF ALT/REF column,
+regardless of length. By default (off), sequences longer than the
+internal threshold ({SVConfig.MAX_ALLELE_LEN} bp) are represented as symbolic alleles
+(e.g. <INS>, <DEL>) to keep the VCF compact.
+Enable this flag when downstream tools require explicit sequences.
+WARNING: may produce very large VCF files for large SVs.
+NOTE: DUP/INV/CSV always use symbolic alleles regardless of this flag."""
+                        )
+    parser.set_defaults(enable_large_sequence=False)
 
     # === Group 3: Variant Filtering Parameters ===
     filter_group = parser.add_argument_group("Filter Parameters")
-    filter_group.add_argument("--min-sv", type=int, default=SVConfig.MIN_SV_SIZE, metavar="INT", 
-                              help=f"Minimum SV size [Default: {SVConfig.MIN_SV_SIZE}]")
+    filter_group.add_argument("--min-sv", type=int, default=SVConfig.MIN_SV_SIZE, metavar="INT",
+                              help=f"Minimum SV span (bp) to report. Variants smaller than this are\n"
+                                   f"skipped during candidate extraction (CIGAR and split-read). [Default: {SVConfig.MIN_SV_SIZE}]")
     filter_group.add_argument("--max-sv", type=int, default=SVConfig.MAX_SV_SIZE, metavar="INT",
-                              help=f"Maximum SV size [Default: {SVConfig.MAX_SV_SIZE}]. SVs larger than this value will be skipped.\n"
-                                   f"Set to -1 to report all variants without upper bound filtering.")
+                              help=f"Maximum SV span (bp) to report. Span SVs (DEL/INS/INV/DUP/CSV)\n"
+                                   f"exceeding this size are tagged FILTER=OVERSIZE in the VCF instead\n"
+                                   f"of being silently dropped, so they can be filtered post-hoc.\n"
+                                   f"Set to -1 to disable the upper bound entirely. [Default: {SVConfig.MAX_SV_SIZE}]\n"
+                                   f"NOTE: does not affect VCF sequence output (see --enable-large-sequence).")
     filter_group.add_argument("--min-mapq", type=int, default=SVConfig.MIN_MAPQ, metavar="INT",
-                              help=f"Minimum mapping quality [Default: {SVConfig.MIN_MAPQ}]")
+                              help=f"Minimum mapping quality for an alignment to be used in SV calling. [Default: {SVConfig.MIN_MAPQ}]")
     filter_group.add_argument("--insdel-tolerance", type=int, default=SVConfig.INSDEL_TOLERANCE, metavar="INT",
-                              help="Tolerance threshold (bp) for calling split-read INS/DELs.\n"
-                                   f"[Default: {SVConfig.INSDEL_TOLERANCE}]")
+                              help=f"Length difference tolerance (bp) between query-gap and ref-gap when\n"
+                                   f"classifying a split-read signal as INS vs DEL. [Default: {SVConfig.INSDEL_TOLERANCE}]")
     filter_group.add_argument("--min-tra-size", type=int, default=SVConfig.MIN_TRA_SIZE, metavar="INT",
-                              help="Threshold size to classify a large gap as a Translocation (TRA/BND).\n"
-                                   f"[Default: {SVConfig.MIN_TRA_SIZE}]")
-    filter_group.add_argument("--min-csv", type=int, default=SVConfig.MIN_CSV_SIZE, metavar="INT", 
-                              help=f"Minimum CSV size for del-ins replacement event[Default: {SVConfig.MIN_CSV_SIZE}]")
+                              help=f"Minimum inter-alignment gap (bp) on the reference to classify an event\n"
+                                   f"as a translocation (TRA/BND) instead of a local SV. [Default: {SVConfig.MIN_TRA_SIZE}]")
+    filter_group.add_argument("--min-csv", type=int, default=SVConfig.MIN_CSV_SIZE, metavar="INT",
+                              help=f"Minimum size (bp) for a combined INS+DEL replacement event (CSV/INS_DEL)\n"
+                                   f"to be reported. [Default: {SVConfig.MIN_CSV_SIZE}]")
     filter_group.add_argument("--max-csv", type=int, default=SVConfig.MAX_CSV_SIZE, metavar="INT",
-                              help=f"Maximum CSV size for del-ins replacement event[Default: {SVConfig.MAX_CSV_SIZE}]. SVs larger than this value will be skipped.\n")
-    filter_group.add_argument("--split-segments", action="store_true", 
-                              help="Enable segment splitting/refinement before DP chaining. [Default: off]")
+                              help=f"Maximum size (bp) for a CSV/INS_DEL replacement event. Events exceeding\n"
+                                   f"this limit are skipped during extraction. [Default: {SVConfig.MAX_CSV_SIZE}]")
+    filter_group.add_argument("--split-segments", action="store_true",
+                              help="Enable query-interval overlap resolution before DP chaining.\n"
+                                   "Splits overlapping alignment segments to improve SV boundary accuracy.\n"
+                                   "[Default: off]")
     
     # === Group 4: Clustering Parameters ===
     cluster_group = parser.add_argument_group("Clustering Parameters")
@@ -98,8 +113,19 @@ def parseArgs(argv: List[str]) -> argparse.Namespace:
                            help=f"Window size for density filtering (bp). [Default: {SVConfig.DENSITY_WINDOW}]")
     adv_group.add_argument("--max-sv-in-window", type=int, default=SVConfig.MAX_SV_IN_WINDOW, metavar="INT",
                            help=f"Max SVs allowed per density window before suppression. [Default: {SVConfig.MAX_SV_IN_WINDOW}]")
+    adv_group.add_argument("--no-retain-sorted", dest="retain_sorted", action="store_false",
+                           help="Delete the intermediate queryname-sorted BAM after processing.\n"
+                                "By default the .qsort.bam is kept on disk so subsequent runs can\n"
+                                "skip the sort step via mtime + integrity reuse check.\n"
+                                "Has no effect when --sorted-bam1/2 are provided (user files are never deleted).")
+    parser.set_defaults(retain_sorted=True)
+    adv_group.add_argument("--force-resort", dest="force_resort", action="store_true",
+                           help="Force re-sorting of BAM even if a valid .qsort.bam already exists.\n"
+                                "Useful when the cached file is suspected to be stale or from a\n"
+                                "different sort run. Has no effect when --sorted-bam1/2 are provided.")
+    parser.set_defaults(force_resort=False)
     adv_group.add_argument("--debug", action="store_true", help="Enable verbose DEBUG logging")
-    
+
     return parser.parse_args(argv)
 
 def update_sv_config(args: argparse.Namespace) -> None:
@@ -127,8 +153,7 @@ def update_sv_config(args: argparse.Namespace) -> None:
         SVConfig.CLUSTER_ins_LEN_TOL = SVConfig._BASE_INS_LEN_TOL + SVConfig.CLUSTER_LEN_TOL
     
     # 4. Output controls and flags
-    if hasattr(args, 'max_alleles_len'): SVConfig.MAX_ALLELE_LEN = args.max_alleles_len
-    if hasattr(args, 'symbolic_alleles'): SVConfig.ENABLE_ALLELE = args.symbolic_alleles
+    if hasattr(args, 'enable_large_sequence'): SVConfig.ENABLE_LARGE_SEQUENCE = args.enable_large_sequence
     if hasattr(args, 'split_segments'): SVConfig.ENABLE_SPLIT_SEGMENTS = args.split_segments
     if hasattr(args, 'enable_density_filter'): SVConfig.ENABLE_DENSITY_FILTER = args.enable_density_filter
     if hasattr(args, 'density_window'): SVConfig.DENSITY_WINDOW = args.density_window
@@ -370,7 +395,7 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
             f.write("##FILTER=<ID=OVERSIZE,Description=\"SV size exceeds user-defined MAX_SV_SIZE threshold\">\n")
             f.write("##FILTER=<ID=EDGE_COMPLEX,Description=\"Macro-level summary record for a complex structural rearrangement clustered at the read edge\">\n")
             f.write("##FILTER=<ID=EDGE_CPLX_SUB,Description=\"Sub-component span record representing a constituent topology within an edge complex event\">\n")
-            f.write("##FILTER=<ID=LOCAL_RETAIN,Description=\"Orphan block falls entirely inside the backbone gap (same strand); retained in-gap sequence, not a true duplication\">\n")
+            # f.write("##FILTER=<ID=LOCAL_RETAIN,Description=\"Orphan block falls entirely inside the backbone gap (same strand); retained in-gap sequence, not a true duplication\">\n")
             # 写入 FORMAT / 样本列头部
             f.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
             f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n")
@@ -393,7 +418,7 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
 
                         record_tuple = sv.to_vcf_record(
                             current_type_idx,
-                            alt_allele=SVConfig.ENABLE_ALLELE,
+                            alt_allele=True,
                             reference=fasta
                         )
                         type_counter_all[sv.type] += 1

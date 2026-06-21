@@ -158,7 +158,7 @@ Each alignment undergoes automatic edge refinement at construction time: CIGAR e
 
 ## Output Format
 
-AsmSV writes standard VCFv4.2/4.3. All records include `SVTYPE`, `SVLEN`, `END`, and `GT` fields.
+AsmSV writes standard VCFv4.2. All records include `SVTYPE`, `SVLEN`, `END`, and `GT` fields.
 
 ### Structural Variant Types
 

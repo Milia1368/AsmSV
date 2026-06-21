@@ -516,7 +516,7 @@ def _classify_orphan_cluster(
 
     if is_strictly_inside:
         if c_strand != anchor_strand:
-            return ("CSV", "INV")
+            return ("CSV", "InvDUP")
         else:
             return ("CSV", "LOCAL_RETAIN")
 
@@ -848,13 +848,36 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
         if extra_info: base_info.update(extra_info)
 
         if abs(dist_q) < getattr(SVConfig, 'GAP_TOLERANCE', 50) and dist_r < -getattr(SVConfig, 'MIN_SV_SIZE', 30):
+            if "COMPLEX" in source_label:
+
+                ref_s1, ref_e1 = min(b1.ref_start, b1.ref_end), max(b1.ref_start, b1.ref_end)
+                ref_s2, ref_e2 = min(b2.ref_start, b2.ref_end), max(b2.ref_start, b2.ref_end)
+                # 计算两段比对块在 Reference 上的重叠长度
+                ref_overlap = max(0, min(ref_e1, ref_e2) - max(ref_s1, ref_s2))
+
+                # 如果两段序列在参考基因组上【完全没有重叠】，且往回跳的距离极大（
+                # 物理上不可能是一个串联重复，而是倒位断点两侧的序列错乱
+                if ref_overlap == 0 or abs(dist_r) > max(3*(ref_e2-ref_s2),1000000) :
+                    return None
             dup_len = abs(dist_r) + dist_q 
             filter_tag = "OVERSIZE" if (getattr(SVConfig, 'MAX_SV_SIZE', -1) != -1 and dup_len >= getattr(SVConfig, 'MAX_SV_SIZE', -1)) else None
             sv_type = "INS" if dup_len < getattr(SVConfig, "TANDEM_DUP_INS_THRESHOLD", 1_000) else "DUP"
-
             pos = right_bp if sv_type == "INS" else left_bp
             if sv_type == "INS":
                 base_info["TANDEM_SOURCE"] = f"{chrom}:{left_bp}-{right_bp}"
+                
+                # ==========================================================
+                # 💡 新增：提取短串联重复的插入序列 SEQ
+                # ==========================================================
+                # 防止由于超长序列导致内存溢出，加入和标准 INS 一样的长度限制保护
+                if query_seq :
+                    ins_qs = min(b1.qe, b2.qs)
+                    # 确保不越界
+                    ins_qe = max(0, min(ins_qs + dup_len, len(query_seq)))
+                    if ins_qe > ins_qs:
+                        base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
+                # ==========================================================
+                
             else:
                 base_info["END"] = right_bp
 
@@ -862,6 +885,16 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
             cand = SVCandidate(sv_type, chrom, pos, dup_len, read_name, info=base_info, filter_str=filter_tag)
             cand.q_start, cand.q_end = min(b1.qe, b2.qs), min(b1.qe, b2.qs) + dup_len
             return cand
+            # pos = right_bp if sv_type == "INS" else left_bp
+            # if sv_type == "INS":
+            #     base_info["TANDEM_SOURCE"] = f"{chrom}:{left_bp}-{right_bp}"
+            # else:
+            #     base_info["END"] = right_bp
+
+            # base_info["SUBTYPE"] = "DUP:TANDEM"
+            # cand = SVCandidate(sv_type, chrom, pos, dup_len, read_name, info=base_info, filter_str=filter_tag)
+            # cand.q_start, cand.q_end = min(b1.qe, b2.qs), min(b1.qe, b2.qs) + dup_len
+            # return cand
 
         if sv_len < 20: 
             return None
@@ -871,7 +904,7 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                 if abs(dist_r) > getattr(SVConfig, 'MIN_TRA_SIZE', 50000): return None
                 sv_type = "DEL" if dist_r > dist_q else "INS"
                 
-                if sv_type == "INS" and (sv_len < getattr(SVConfig, 'MAX_ALLELE_LEN', 100000) or getattr(SVConfig, 'MAX_SV_SIZE', -1) == -1):
+                if sv_type == "INS" and (getattr(SVConfig, 'ENABLE_LARGE_SEQUENCE', False) or sv_len < getattr(SVConfig, 'MAX_ALLELE_LEN', 5000)):
                     if query_seq:
                         ins_qs, ins_qe = min(b1.qe, b2.qs), max(0, min(min(b1.qe, b2.qs) + sv_len, len(query_seq)))
                         base_info["SEQ"] = extract_insertion_seq(ins_qs, ins_qe, strand)
@@ -1035,10 +1068,10 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
         
         c1 = SVCandidate("BND", anchor_chr, bb_pos, 0, read_name, info={
             "EVENT": global_event_id, "CHR2": closest_orphan.ref_name, "POS2": orphan_pos, "TRA_TYPE": tra_type, "STRANDS": strands, "SOURCE": "COMPLEX_EDGE"
-        })
+        },filter_str="EDGE_COMPLEX")
         c2 = SVCandidate("BND", closest_orphan.ref_name, orphan_pos, 0, read_name, info={
             "EVENT": global_event_id, "CHR2": anchor_chr, "POS2": bb_pos, "TRA_TYPE": tra_type, "STRANDS": strands[::-1], "SOURCE": "COMPLEX_EDGE"
-        })
+        },filter_str="EDGE_COMPLEX")
         
         # 交叉互锁 MATEID
         c1.id = f"{global_event_id}_BND2"
@@ -1081,7 +1114,6 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
             
             complex_cluster_idx += 1 
             global_event_id = f"{read_name}_CPLX_{complex_cluster_idx}"
-            
             if len(merged_clusters) == 1:
                 m = merged_clusters[0]
                 is_inv = (m.strand != anchor_strand)
@@ -1198,21 +1230,23 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                     span_info["FRAGS"] = ",".join(f"{s}-{e}" for s, e in m.sub_spans)
                     
                 if m.subtype != "DUP:TANDEM":
-                    # 1. 局部保留 (LOCAL_RETAIN) 
-                    # 作用于主干边缘，但通过 FILTER=LOCAL_RETAIN 进行隔离，防止被误判为常规插入
+                    # 1. 局部保留 (LOCAL_RETAIN) 局部混乱
                     if m.subtype == "LOCAL_RETAIN":
-                        span_info["END"] = anchor_bp_left
-                        span_cand = SVCandidate("CSV", anchor_chr, anchor_bp_left, m.true_q_len, read_name, info=span_info, filter_str="LOCAL_RETAIN")
-                        span_cand.id = f"{global_event_id}_SPAN_{idx}"
-                        candidates.append(span_cand)
+                        # m.subtype="DUP"
+                        # span_info["END"] = m.ref_end
+                        # dup_len = m.ref_end - m.ref_start
+                        # span_cand = SVCandidate("CSV", anchor_chr, m.ref_start, dup_len , read_name, info=span_info, filter_str="LOCAL_RETAIN")
+                        # span_cand.id = f"{global_event_id}_SPAN_{idx}"
+                        # candidates.append(span_cand)
+                        pass
                         
                     # 2. 嵌套倒位 (INV) 
                     # 必须使用其真实的参考基因组坐标 (m.ref_start) 和真实倒位跨度
-                    elif m.subtype == "INV":
+                    elif m.subtype == "InvDUP":
                         span_info["END"] = m.ref_end  # 倒位必须有明确的 END = POS + SVLEN
                         inv_len = m.ref_end - m.ref_start
                         # 坐标使用 m.ref_start，SVLEN 使用 inv_len
-                        span_cand = SVCandidate("INV", m.ref_name, m.ref_start, inv_len, read_name, info=span_info)
+                        span_cand = SVCandidate("CSV", m.ref_name, m.ref_start, inv_len, read_name, info=span_info)
                         span_cand.id = f"{global_event_id}_SPAN_{idx}"
                         candidates.append(span_cand)
                         
