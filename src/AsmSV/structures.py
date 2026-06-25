@@ -133,7 +133,7 @@ class SVCandidate:
         if self.read_names:
             self.info["RNAMES"] = ",".join(sorted(self.read_names))
 
-        if self.type=="CSV" and self.raw_type=="INS_DEL":
+        if self.type=="CSV" and self.info["SUBTYPE"]=="INS_DEL":
             info_list.append(f"SEQ={self.info['SEQ']}")
 
         exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE"}
