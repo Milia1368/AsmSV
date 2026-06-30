@@ -126,9 +126,6 @@ class SVCandidate:
                     alt_val = "<DEL>"
             elif self.type in ("DUP", "INV", "TRA", "CSV"):
                 alt_val = f"<{self.raw_type}>"
-                 
-        if self.mateid:
-            info_list.append(f"MATEID={self.mateid}")
 
         if self.read_names:
             self.info["RNAMES"] = ",".join(sorted(self.read_names))
@@ -136,7 +133,9 @@ class SVCandidate:
         if self.type=="CSV" and self.info["SUBTYPE"]=="INS_DEL":
             info_list.append(f"SEQ={self.info['SEQ']}")
 
-        exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE"}
+        exclude = {"SEQ", "CHR2", "POS2", "END", "SVLEN", "SVTYPE", "MATEID"}  # 加入MATEID
+        if self.mateid:
+            info_list.append(f"MATEID={self.mateid}")
         for k, v in self.info.items():
             if k not in exclude and v is not None and v != "":
                 if isinstance(v, float):

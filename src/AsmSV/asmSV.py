@@ -488,7 +488,27 @@ def run(argv):
 
 def main():
     """Parameterless entry point for setuptools console_scripts."""
-    sys.exit(run(sys.argv[1:]))   
+    sys.exit(run(sys.argv[1:]))
+    # run([
+    #     '--bam1',
+    #     '/io/wuxiaomia/sv_/answer/t2t_assembly_data/tools_aln/minimap2_hap1.bam',
+    #     '--bam2',
+    #     '/io/wuxiaomia/sv_/answer/t2t_assembly_data/tools_aln/minimap2_hap2.bam',
+    #     '--ref',
+    #     '/io/wuxiaomia/Titan/data/chm13/chm13v2.0.fa',
+    #     # '--bam1', '/io/wuxiaomia/Titan/data/aln/Assembly/simulations/shiijie_inv_dup_tra/tools_aln/minimap2_hap1.bam',
+    #     # '--bam2', '/io/wuxiaomia/Titan/data/aln/Assembly/simulations/shiijie_inv_dup_tra/tools_aln/minimap2_hap2.bam',
+    #     # '--ref', '/io/wuxiaomia/Titan/data/GRCh38_chr1_chr2.fa',
+    #     # '--min-sv'
+    #     # '30',
+    #     # '--insdel-tolerance',
+    #     # '10',
+    #     # '--debug',
+    #     "-o",
+    #     "t2t1.vcf"
+    # #     # "--min-tra-size","80000"
+    # ])     
+
 
 if __name__ == '__main__':
     main()

@@ -460,7 +460,8 @@ class OrphanCluster:
     subtype   : str   # 机制字符串，见上方规则
     blocks    : list = dc_field(default_factory=list, repr=False)
     true_q_len: int  = 0    #
-    sub_spans : list = dc_field(default_factory=list, repr=False)  # [(ref_start, ref_end), ...]
+    sub_spans : list = dc_field(default_factory=list, repr=False)  # [(ref_start, ref_end(qs,qe,strand)), ...]
+    cluster_spans:Tuple[str,int, int, int, int, str] = () #(chr,rs,re,qs,qe,strand)
 
     @property
     def ref_len(self) -> int:
@@ -760,9 +761,16 @@ def condense_orphan_blocks(
             anchor_bp_left, anchor_bp_right,
             TANDEM_MAX, PROXIMAL_MAX,
         )
-        true_q_len = max(b.qe for b in c_blocks) - min(b.qs for b in c_blocks)
+        # cre= max(b.ref_end for b in c_blocks)
+        # crs=min(b.ref_start for b in c_blocks)
+        # cqe= max(b.qe for b in c_blocks)
+        # cqs=min(b.qs for b in c_blocks)
+        # true_q_len =cqe-cqs
+        true_q_len=c_q_end-c_q_start
         # FIX: 记录各子块的 ref 坐标，防止多块合并后 span 虚大
-        sub_spans  = [(b.ref_start, b.ref_end) for b in c_blocks]
+        sub_spans  = [(b.ref_start, b.ref_end,b.qs,b.qe,b.strand) for b in c_blocks]
+        # cluster_spans=(c_chr,crs,cre,cqs,cqe,c_strand)
+        cluster_spans=(c_chr,c_r_start,c_r_end,c_q_start,c_q_end,c_strand)
         return OrphanCluster(
             ref_name=c_chr, strand=c_strand,
             ref_start=c_r_start, ref_end=c_r_end,
@@ -771,6 +779,7 @@ def condense_orphan_blocks(
             blocks=c_blocks,
             true_q_len=true_q_len,
             sub_spans=sub_spans,
+            cluster_spans=cluster_spans
         )
 
     clusters = []
@@ -1036,13 +1045,13 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
             
             sub_type_parts.append(m.subtype)
             span_info = {
-                "EVENT": global_event_id, "CPLX_IDX": idx,
+                "EVENT": global_event_id, # "CPLX_IDX": idx,
                 "SRCREG": f"{m.ref_name}:{m.ref_start}-{m.ref_end}",
                 "SOURCE": "COMPLEX_EDGE", "SUBTYPE": m.subtype,
                 "DEL_LEN": 0, "INS_LEN": m.true_q_len, "END": bb_pos
             }
             if m.is_fragmented:
-                span_info["FRAGS"] = ",".join(f"{s}-{e}" for s, e in m.sub_spans)
+                span_info["SUBREGS"] = ",".join(f"{s}-{e}" for s, e,qs,qe,strd in m.sub_spans)
             
             span_cand = SVCandidate("CSV", anchor_chr, bb_pos, m.true_q_len, read_name, info=span_info, filter_str="EDGE_COMPLEX")
             span_cand.id = f"{global_event_id}_SPAN_{idx}"
@@ -1074,8 +1083,8 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
         },filter_str="EDGE_COMPLEX")
         
         # 交叉互锁 MATEID
-        c1.id = f"{global_event_id}_BND2"
-        c2.id = f"{global_event_id}_BND1"
+        c1.id = f"{global_event_id}_BND_EDGE_B"
+        c2.id = f"{global_event_id}_BND_EDGE_A"
         c1.mateid = c2.id
         c2.mateid = c1.id
         c1.info["MATEID"] = c1.mateid
@@ -1148,20 +1157,33 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                     if is_remote_inv:
                         m.subtype = m.subtype.replace("TANDEM", "DISP:INTRA")
                     else:
-                        is_del = (true_del_left + true_del_right) > getattr(SVConfig, 'MIN_SV_SIZE', 30)
-                        is_ins = (true_ins_left + true_ins_right) > getattr(SVConfig, 'MIN_SV_SIZE', 30)
+                        MIN_SV = getattr(SVConfig, 'MIN_SV_SIZE', 30)
+
+                        # 1. 计算两侧附加变异的总和
+                        total_ins = true_ins_left + true_ins_right
+                        total_del = true_del_left + true_del_right
+
+                        # 2. 基于总和进行整体定性
+                        is_ins = total_ins > MIN_SV
+                        is_del = total_del > MIN_SV
 
                         if   is_ins and is_del: inv_subtype = "INV-INS-DEL"
                         elif is_ins:            inv_subtype = "INV-INS"
                         elif is_del:            inv_subtype = "INV-DEL"
                         else:                   inv_subtype = "INV"
 
+                        # 3. 构建基础 info 字典 (确保在 inv_subtype 计算之后)
                         info = {
                             "EVENT":       global_event_id,
                             "SUBTYPE":     inv_subtype,
                             "INV_SPAN":    int(inv_span_len),
                             "BP_DETAILS":  f"LC:{int(q_raw_left)},RC:{int(q_raw_right)},LF:{int(raw_gap_left)},RF:{int(raw_gap_right)}"
                         }
+                        
+                        # 4. 动态追加总和字段 (仅在发生相应变异时输出，避免冗余)
+                        if is_ins: info["BP_INS"] = int(delta_left+delta_right)
+                        if is_del: info["BP_DEL"] = int(-(delta_right+delta_left))
+                        
                         
                         if inv_subtype == "INV":
                             inv_cand = SVCandidate("INV", anchor_chr, inv_start, inv_span_len, read_name, info=info)
@@ -1184,12 +1206,20 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
             all_nodes = [bb_left] + orphans_in_between + [bb_right]
             _extract_and_merge_nested_nodes(all_nodes, "COMPLEX", global_event_id, nested_merged_dict)
             candidates.extend(nested_merged_dict.values())
-
+            sub_type_info = []
+            
+            # 1. 记录 Backbone 的跨度（修正 NameError：直接使用 bb_left.qe 和 bb_right.qs）
+            sub_type_info.append(
+                f"backbone,{bb_left.ref_name},{anchor_bp_left},{anchor_bp_right},{bb_left.qe},{bb_right.qs},{main_strand}"
+            )
             sub_type_parts = []
             prev_chr, prev_strand, prev_pos = anchor_chr, anchor_strand, anchor_pos
 
             for idx, m in enumerate(merged_clusters):
                 sub_type_parts.append(m.subtype)
+                sub_type_info.append(
+                    f"{m.subtype},{m.cluster_spans[0]},{m.cluster_spans[1]},{m.cluster_spans[2]},{m.cluster_spans[3]},{m.cluster_spans[4]},{m.cluster_spans[5]}"
+                )
                 m_enter_pos = m.ref_start if m.strand == '+' else m.ref_end
                 m_leave_pos = m.ref_end   if m.strand == '+' else m.ref_start
 
@@ -1201,8 +1231,8 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                     "EVENT": global_event_id, "CHR2": m.ref_name, "POS2": m_enter_pos,
                     "TRA_TYPE": "INTER_CHR" if is_inter_chr else "INTRA_CHR", "STRANDS": prev_strand + m.strand, "SOURCE": "COMPLEX",
                 }, filter_str=None if is_distant_jump else "LOCAL_BND")
-                bnd_entry.id = f"{global_event_id}_BND_{idx}_ENTRY"
-                bnd_entry.mateid = f"{global_event_id}_BND_{idx}_EXIT"
+                bnd_entry.id = f"{global_event_id}_BND_{idx}_A"
+                bnd_entry.mateid = f"{global_event_id}_BND_{idx}_B"
 
                 bnd_exit = SVCandidate("BND", m.ref_name, m_enter_pos, 0, read_name, info={
                     "EVENT": global_event_id, "CHR2": prev_chr, "POS2": prev_pos,
@@ -1220,14 +1250,14 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                 # ── 基础 Span 记录构建（保留全部溯源标签） ──
                 span_info = {
                     "EVENT": global_event_id, 
-                    "CPLX_IDX": idx,
+                   # "CPLX_IDX": idx,
                     "SRCREG": f"{m.ref_name}:{m.ref_start}-{m.ref_end}",
                     "SUBTYPE": m.subtype, 
                     "DEL_LEN": 0, 
                     "INS_LEN": m.true_q_len
                 }
                 if m.is_fragmented:
-                    span_info["FRAGS"] = ",".join(f"{s}-{e}" for s, e in m.sub_spans)
+                    span_info["SUBREGS"] = ",".join(f"{s}-{e}" for s, e,qs,qe,strd in m.sub_spans)
                     
                 if m.subtype != "DUP:TANDEM":
                     # 1. 局部保留 (LOCAL_RETAIN) 局部混乱
@@ -1267,8 +1297,8 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
                     "EVENT": global_event_id, "CHR2": bb_right.ref_name, "POS2": bb_right_enter,
                     "TRA_TYPE": "INTER_CHR" if tail_inter else "INTRA_CHR", "STRANDS": prev_strand + bb_right.strand,
                 })
-                t1.id = f"{global_event_id}_TAIL_BND1"
-                t1.mateid = f"{global_event_id}_TAIL_BND2"
+                t1.id = f"{global_event_id}_BND_TAIL_A"
+                t1.mateid = f"{global_event_id}_BND_TAIL_B"
                 
                 t2 = SVCandidate("BND", bb_right.ref_name, bb_right_enter, 0, read_name, info={
                     "EVENT": global_event_id, "CHR2": prev_chr, "POS2": prev_pos,
@@ -1284,17 +1314,20 @@ def resolve_chain_svs(chains: List['AlignedSegment'], main_strand: str, main_idx
             if len(merged_clusters) >= 2:
                 up_down      = bool(anchor_pos > anchor_end)
                 affected_ref = abs(dist_r)
-                strands_str  = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
+                #strands_str  = (bb_right.strand + anchor_strand) if up_down else (anchor_strand + bb_right.strand)
                 eventtype    = (merged_clusters[0].subtype if len(merged_clusters) == 1 else "COMPLEX_" + "_".join(sub_type_parts))
                 summary_pos  = anchor_end if up_down else anchor_pos
                 summary_end  = summary_pos + affected_ref
+                # 3. 将数组合并为 VCF 兼容的字符串格式 (以 | 分隔)
+                serialized_sub_svs = "|".join(sub_type_info)
                 
                 summary_info = {
                     "EVENT": global_event_id, "EVENTTYPE": eventtype, "SUBTYPE": "COMPLEX",
                     "DEL_LEN": int(affected_ref), "INS_LEN": int(max(0, dist_q)), "END": int(summary_end),
-                    "ORPHAN_CLUSTERS": len(merged_clusters), "BACKBONE_STRAND": strands_str, "BACKBONE_FLIP": up_down,
+                    "ORPHAN_CLUSTERS": len(merged_clusters), #"BACKBONE_STRAND": strands_str, "BACKBONE_FLIP": up_down,
+                    "SUB_SVS": serialized_sub_svs # <--- 修正命名并写入字符串
                 }
-                
+
                 summary_cand = SVCandidate("CSV", anchor_chr, summary_pos, max(0, dist_q), read_name, info=summary_info, filter_str="COMPLEX")
                 summary_cand.id = f"{global_event_id}_SUMMARY"
                 candidates.append(summary_cand)

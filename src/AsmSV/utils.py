@@ -27,7 +27,7 @@ COMPLEMENT_MAP = str.maketrans('ATCGNatcgn', 'TAGCNtagcn')
 def parseArgs(argv: List[str]) -> argparse.Namespace:
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Advanced Long-read Assembly SV Detector (v1.0)",
+        description="Advanced Long-read Assembly SV Detector (v1.2.1)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
@@ -318,7 +318,7 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
         with open(output_path, 'w', buffering=10*1024*1024) as f:
             f.write("##fileformat=VCFv4.2\n")
             f.write(f"##fileDate={time.strftime('%Y%m%d')}\n")
-            f.write("##source=AssembleSV_Refine_Tool\n")
+            f.write("##source=AsmSV\n")
             
             sorted_contigs = sorted(header_contigs.items(), key=lambda item: chrom_ranks[item[0]])
             
@@ -326,60 +326,61 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
             contig_lines = [f"##contig=<ID={name},length={length}>\n" for name, length in sorted_contigs]
             f.writelines(contig_lines)
                 
-            alt_lines = [f"##ALT=<ID={t},Description=\"Structural Variant {t}\">\n" 
-                         for t in ["INS", "DEL", "DUP", "INV", "TRA", "BND", "COMPLEX","CSV"]]
+            alt_defs = [
+                ("INS", "Insertion"),
+                ("DEL", "Deletion"),
+                ("DUP", "Duplication"),
+                ("INV", "Inversion"),
+                ("BND", "Breakend"),
+                ("TRA", "Translocation"),
+                ("CSV", "Complex sequence variant"),
+                ("COMPLEX", "Complex structural variant"),
+            ]
+            alt_lines = [f"##ALT=<ID={t},Description=\"{desc}\">\n" for t, desc in alt_defs]
             f.writelines(alt_lines)
-            
-           # ==============================================================================
-            # VCF INFO 头部定义 (极简规范版 + 完美拓扑绘图支持)
-            # ==============================================================================
+
             info_defs = [
-                # ── 1. 标准 VCF / SV 核心控制字段 ──
-                ("SVTYPE", 1, "String", "Type of structural variant"),
-                ("SVLEN", ".", "Integer", "Difference in length between REF and ALT alleles"),
-                ("END", 1, "Integer", "End position of the variant described in this record."),
-                # ("SVCLAIM", 1, "String", "Claim type: J=junction/breakpoint, D=dosage/copy-number (VCF 4.4)"),
-                ("MATEID", ".", "String", "ID of the mate BND record (VCF 4.2 BND pairing)"),
-                
-                # ── 2. 单样本单倍型支持与读名追踪 ──
-                ("SUPPORT_H1", 1, "Integer", "Number of reads/haplotypes from hap1 supporting the variant"),
-                ("SUPPORT_H2", 1, "Integer", "Number of reads/haplotypes from hap2 supporting the variant"),
-                ("RNAMES", ".", "String", "Names of supporting reads"),
-                ("SOURCE", 1, "String", "Detection layer: backbone (split-read), CIGAR / CIGAR_MERGED (CIGAR-internal), COMPLEX / COMPLEX_EDGE (orphan-cluster)"),
-                
-                # ── 3. 易位 (BND/TRA) 拓扑核心 ──
-                ("TRA_TYPE", 1, "String", "Translocation type: INTER_CHR (diff chroms) or INTRA_CHR (same chrom dist > limit)"),
-                ("CHR2", 1, "String", "Chromosome for BND/TRA connection"),
-                ("POS2", 1, "Integer", "Position for BND/TRA connection"),
-                ("STRANDS", 1, "String", "Strand orientation of the structural variant (e.g., +-, -+)"),
-                
-                # ── 4. 复杂变异 (CSV/INV/Macro-Event) 组合语义与物理长度 ──
-                ("EVENTTYPE", 1, "String", "High-level event type for CSV summary records"),
-                ("SUBTYPE", 1, "String", "Variant subclass: DUP:TANDEM, DUP:PROXIMAL, DUP:DISP:INTRA, DUP:DISP:INTER, InvDUP:*, INV, INV-INS, INV-DEL, INV-INS-DEL, INS_DEL, LOCAL_RETAIN, COMPLEX, MULTI_DUP:TANDEM"),
-                ("DEL_LEN", 1, "Integer", "Length of reference sequence deleted or replaced (bp)"),
-                ("INS_LEN", 1, "Integer", "Length of novel or inserted query sequence (bp)"),
-                ("SEQ", 1, "String", "Inserted sequence: written to INFO for CSV/INS_DEL; embedded in ALT allele for INS"),
-                ("BP_DETAILS", 1, "String", "Compressed breakpoint metrics (Format: LC:L_CLIP,RC:R_CLIP,LF:L_FLANK,RF:R_FLANK)"),
-                
-                # ── 5. 事件图谱与级联嵌套追踪 ──
-                ("EVENT", ".", "String", "ID of the primary event associated with this breakend or variant"),
-                # ("PEVENT", ".", "String", "Parent event ID for nested sub-variants in complex SVs"),
-                ("ORPHAN_CLUSTERS", 1, "Integer", "Number of unmapped or orphan read clusters forming the COMPLEX variant"),
-                ("MERGED_BLOCKS", 1, "Integer", "Number of tandem alignment blocks merged into this single SV event"),
-                
-                # ── 6. 序列来源与碎片化拓扑追踪 (极简版) ──
-                ("CPLX_IDX", 1, "Integer", "Zero-based index of the sub-cluster within a complex macro-event"),
-                ("SRCREG", 1, "String", "Source genomic region of the variant sequence (Format: chr:start-end)"),
-                ("FRAGS", 1, "String", "Comma-separated sub-spans if the source region is fragmented (start1-end1,start2-end2)"),
-                
-                # ── 7. 主干网络拓扑特征 (专供绘图可视化保留) ──
-                ("BACKBONE_STRAND", 1, "String", "Strand orientation of the flanking genomic backbone elements"),
-                ("BACKBONE_FLIP", 0, "Flag", "Flag indicating backbone alignment encounters coordinate regression or backtracking across the gap"),
-                
-                # ── 8. 倒位与串联重复精细结构 ──
-                ("INV_SPAN", 1, "Integer", "Genomic base-pair span length of the inner inverted region"),
-                # ("SIDE", 1, "String", "Breakend side within a paired BND event: LEFT or RIGHT"),
-                ("TANDEM_SOURCE", 1, "String", "Genomic coordinate region of the original source sequence for tandem insertions"),
+                # Standard SV fields (VCF 4.2)
+                ("SVTYPE", 1, "String", "Type of structural variant (DEL, INS, DUP, INV, BND, TRA, CSV)"),
+                ("SVLEN", 1, "Integer", "Signed length difference between REF and ALT alleles; negative for deletions"),
+                ("END", 1, "Integer", "End position of the variant on the reference (1-based, inclusive); equals POS for breakends"),
+                ("MATEID", 1, "String", "ID of the partner breakend record in a BND pair (VCF 4.2)"),
+
+                # Haplotype-resolved assembly support
+                ("SUPPORT_H1", 1, "Integer", "Number of supporting assembly read groups from haplotype 1 after cross-haplotype clustering"),
+                ("SUPPORT_H2", 1, "Integer", "Number of supporting assembly read groups from haplotype 2 after cross-haplotype clustering"),
+                ("RNAMES", 1, "String", "Comma-separated names of assembly reads (query sequences) supporting this variant"),
+                ("SOURCE", 1, "String", "Detection layer: backbone (collinear split-read gap), CIGAR (single-segment CIGAR INDEL), CIGAR_MERGED (merged adjacent CIGAR INDELs), COMPLEX (branch-cluster within backbone gap), COMPLEX_EDGE (edge branch cluster outside backbone)"),
+
+                # Breakend (BND/TRA) mate coordinates
+                ("TRA_TYPE", 1, "String", "Breakend scope: INTER_CHR (breakpoints on different chromosomes) or INTRA_CHR (both breakpoints on the same chromosome)"),
+                ("CHR2", 1, "String", "Chromosome of the mate breakend"),
+                ("POS2", 1, "Integer", "1-based reference position of the mate breakend"),
+                ("STRANDS", 1, "String", "Strand orientations at POS and POS2 (first and second character, each + or -), used to construct the BND ALT allele per VCF 4.2"),
+
+                # Complex variant (CSV) decomposition
+                ("EVENTTYPE", 1, "String", "Mechanism label on COMPLEX summary records: single branch-cluster subtype, or COMPLEX_<subtype1>_<subtype2>_... for multi-cluster events"),
+                ("SUBTYPE", 1, "String", "Mechanistic subclass. Linear: DUP:TANDEM, MULTI_DUP:TANDEM, INS_DEL. Inversion-related: INV, INV-INS, INV-DEL, INV-INS-DEL, InvDUP, InvDUP:TANDEM, InvDUP:PROXIMAL, InvDUP:DISP:INTRA. Dispersed duplication: DUP:PROXIMAL, DUP:DISP:INTRA, DUP:DISP:INTER. Other: LOCAL_RETAIN, COMPLEX"),
+                ("DEL_LEN", 1, "Integer", "Length in base pairs of reference sequence deleted or replaced at this locus"),
+                ("INS_LEN", 1, "Integer", "Length in base pairs of novel sequence inserted at this locus (query-derived)"),
+                ("SEQ", 1, "String", "Inserted sequence; for INS records placed in the ALT column when below length threshold, for CSV(INS_DEL) records placed in INFO"),
+                ("BP_DETAILS", 1, "String", "Inversion flanking gap metrics at outer backbone breakpoints: LC/RC = left/right query gaps (bp) between backbone and inverted branch; LF/RF = left/right reference gaps (bp) between outer breakpoints and inverted segment boundaries"),
+                ("BP_DEL", 1, "Integer", "Net reference sequence loss (bp) at inversion flanking breakpoints; present only when flanking deletions exceed MIN_SV_SIZE"),
+                ("BP_INS", 1, "Integer", "Net inserted sequence length (bp) at inversion flanking breakpoints; present only when flanking insertions exceed MIN_SV_SIZE"),
+
+                # Event linkage and nested structure
+                ("EVENT", ".", "String", "Shared event identifier linking related records from one complex rearrangement on an assembly read (BND pairs, span records, summary); comma-separated if merged across clusters"),
+                ("ORPHAN_CLUSTERS", 1, "Integer", "Number of branch (orphan) alignment clusters in a COMPLEX summary record"),
+                ("MERGED_BLOCKS", 1, "Integer", "Number of adjacent alignment blocks merged into one nested linear SV within a branch network"),
+
+                # Source coordinates and topology trace
+                ("SRCREG", 1, "String", "Reference interval of the inserted or duplicated source sequence (format: chr:start-end)"),
+                ("SUBREGS", 1, "String", "Comma-separated reference sub-intervals (start-end) when the source region is fragmented across multiple branch alignment blocks; chromosome is that of SRCREG"),
+                ("SUB_SVS", 1, "String", "Pipe-separated topology trace on COMPLEX summary records. First entry: backbone,chr,ref_start,ref_end,query_start,query_end,strand; subsequent entries: subtype,chr,ref_start,ref_end,query_start,query_end,strand for each branch cluster"),
+
+                # Inversion and tandem duplication detail
+                ("INV_SPAN", 1, "Integer", "Length in base pairs of the inner inverted segment on the reference (inv_end minus inv_start)"),
+                ("TANDEM_SOURCE", 1, "String", "Reference interval of the template region for a tandem duplication or short tandem insertion (format: chr:start-end)"),
             ]
             
             
@@ -388,16 +389,18 @@ def write_vcf(sv_list: List[SVCandidate], output_path: str, header_contigs: Dict
                           for i_id, i_num, i_type, i_desc in info_defs]
             f.writelines(info_lines)
             
-            # 写入 FILTER 过滤标签定义（与代码中 filter_str 的赋值完美闭环）
-            f.write("##FILTER=<ID=PASS,Description=\"All filters passed, high confidence variant\">\n")
-            f.write("##FILTER=<ID=COMPLEX,Description=\"Multi-cluster complex structural variant macro summary record (filtered)\">\n")
-            f.write("##FILTER=<ID=LOCAL_BND,Description=\"Local short-range breakend junction within complex cluster, not a true distal translocation (filtered)\">\n")
-            f.write("##FILTER=<ID=OVERSIZE,Description=\"SV size exceeds user-defined MAX_SV_SIZE threshold\">\n")
-            f.write("##FILTER=<ID=EDGE_COMPLEX,Description=\"Macro-level summary record for a complex structural rearrangement clustered at the read edge\">\n")
-            f.write("##FILTER=<ID=EDGE_CPLX_SUB,Description=\"Sub-component span record representing a constituent topology within an edge complex event\">\n")
+            filter_defs = [
+                ("PASS", "All filters passed"),
+                ("COMPLEX", "Multi-cluster (>=2 branch clusters) complex SV summary record; component BND and span records may have FILTER=PASS"),
+                ("LOCAL_BND", "Intra-chromosomal breakend with partner distance below MIN_TRA_SIZE; local junction within a complex cluster, not a distal translocation"),
+                ("OVERSIZE", "Variant size exceeds the user-defined --max-sv threshold"),
+                ("EDGE_COMPLEX", "Complex rearrangement involving branch clusters outside the collinear backbone (read-edge orphans); applies to summary, span, and BND records from that event"),
+            ]
+            for fid, fdesc in filter_defs:
+                f.write(f"##FILTER=<ID={fid},Description=\"{fdesc}\">\n")
             # f.write("##FILTER=<ID=LOCAL_RETAIN,Description=\"Orphan block falls entirely inside the backbone gap (same strand); retained in-gap sequence, not a true duplication\">\n")
             # 写入 FORMAT / 样本列头部
-            f.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
+            f.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Phased genotype: 1|0 (Hap1 only), 0|1 (Hap2 only), 1|1 (both haplotypes), ./. (unknown)\">\n")
             f.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n")
             
             # Generator-based processing to avoid loading all strings into memory
