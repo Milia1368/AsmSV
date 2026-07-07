@@ -9,7 +9,7 @@
 
 **AsmSV: Assembly-based Haplotype-Resolved Structural Variant Caller**
 
-[Installation](#installation) · [Quick Start](#quick-start) · [Method](#method-overview) · [Output](#output-format) · [Parameters](#parameters) · [Examples](#examples) · [Citation](#citation)
+[Installation](#installation) · [Quick Start](#quick-start) · [Method](#method-overview) · [Output](#output-format) · [Parameters](#parameters) · [Scripts](#scripts) · [Citation](#citation)
 
 ---
 
@@ -25,7 +25,7 @@ AsmSV is built on a **Backbone–Branch strategy**: a dynamic-programming chain 
 
 - **Comprehensive SV spectrum** — DEL, INS, DUP (tandem / proximal / dispersed), INV, BND/TRA, and compound CSV (complex sequence variant) types including INV-INS, INV-DEL, InvDUP, and INS_DEL replacements.
 - **Phased genotyping && Fine‑grained traceable annotation fields** — Cross‑haplotype clustering generates phased genotypes directly from diploid assemblies, alongside standard VCF‑v4.2 output enriched with traceable INFO‑field annotations to facilitate in‑depth interrogation of individual complex structural variants (CSVs).
-- **Complex event decomposition** — multi-branch events are decomposed into individual SV components linked by shared `EVENT` IDs, plus a macro `*_SUMMARY` record per complex locus. Use the bundled `scripts/plot.py` to visualize CRR (complex rearrangement region) topology. The hierarchical record layout of a CRR is documented in `[docs/Hierarchical_VCF_Format.md](docs/Hierarchical_VCF_Format.md)`.
+- **Complex event decomposition** — multi-branch events are decomposed into individual SV components linked by shared `EVENT` IDs, plus a macro `*_SUMMARY` record per complex locus. Use the bundled `scripts/plot.py` to visualize CRR (complex rearrangement region) topology. The hierarchical record layout of a CRR is documented in [docs/Hierarchical_VCF_Format.md](docs/Hierarchical_VCF_Format.md).
 - **Fast & lightweight** — multi-threaded with safe IPC serialization of alignment records. On a 3950X (16-core / 128 GB) at default 8 threads, one human genome takes ~74 s (index reused, 6.2 GB) or ~207 s (index rebuilt, 8.0 GB).
 - **Flexible filtering** — BED-based region masking, sliding-window density filtering, and configurable size/quality thresholds.
 
@@ -408,7 +408,7 @@ The global score additionally penalizes unmapped query regions at both ends.
 
 
 
-## Examples
+## Scripts
 
 The `scripts/` directory provides helper scripts for filtering VCF output, decomposing CSV records, plotting complex regions. All accept `-h` for full help; outputs default to a derived name next to the input when `-o` is omitted.
 
