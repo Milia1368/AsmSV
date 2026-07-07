@@ -13,7 +13,7 @@ import os
 import sys
 
 
-def default_output(input_path, tag="ins_del_split"):
+def default_output(input_path, tag="insdel_split"):
     dirname = os.path.dirname(os.path.abspath(input_path))
     name = os.path.basename(input_path)
     if name.endswith(".vcf.gz"):
@@ -100,7 +100,7 @@ def process_vcf_line(line, id_counter):
 def main():
     parser = argparse.ArgumentParser(description="Split INS_DEL CSV records into DEL + INS.")
     parser.add_argument("-i", "--input", required=True, help="Input VCF")
-    parser.add_argument("-o", "--output", help="Output VCF (default: <input>.ins_del_split.vcf)")
+    parser.add_argument("-o", "--output", help="Output VCF (default: <input>.insdel_split.vcf)")
     args = parser.parse_args()
 
     if not os.path.isfile(args.input):

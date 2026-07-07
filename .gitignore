@@ -12,13 +12,12 @@ __pycache__/
 temp/
 build/
 dist/
-example/*.p[n|d][g|f]
+scripts/*.p[n|d][g|f]
 # 过滤项目本身生成的 egg-info 目录 (截图中的 src/AsmSV.egg-info)
 *.egg-info/
 *.egg
 *.vcf*
 *.log
-*.png
 *bench*
 *.txt*
 # =========================
