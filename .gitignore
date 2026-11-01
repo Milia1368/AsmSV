@@ -1,40 +1,35 @@
-# =========================
-# 1. Python 编译文件与缓存
-# =========================
 __pycache__/
 *.py[cod]
-*$py.class
-
-# =========================
-# 2. 你的项目中需要过滤的打包产物
-# =========================
-# 过滤打包时生成的 build 和 dist 文件夹
-temp/
+*.egg-info/
 build/
 dist/
-scripts/*.p[n|d][g|f]
-# 过滤项目本身生成的 egg-info 目录 (截图中的 src/AsmSV.egg-info)
-*.egg-info/
-*.egg
-*.vcf*
+cache/
+validation/
+archive/
+history/
+origin.json
+.venv/
+*.bam
+*.bai
+*.cram
+*.crai
+*.fa
+*.fasta
+*.fai
+*.vcf
+*.vcf.gz
+*.tbi
+*.events.jsonl
 *.log
-*bench*
-*.txt*
-# =========================
-# 3. 虚拟环境 (预防你未来在目录下创建虚拟环境)
-# =========================
-venv/
-env/
-.env
-src/AsmSV/*.txt
-*.copy*
-# =========================
-# 4. 编辑器与系统生成文件
-# =========================
-# VS Code / PyCharm 配置
-.vscode/
-.idea/
-
-# macOS / Windows 系统文件
 .DS_Store
-Thumbs.db
+
+# Public documentation is an explicit allowlist.
+/docs/*
+!/docs/USAGE.md
+!/docs/OUTPUT_FORMAT.md
+
+# Local research, release audits and experiment-specific helpers.
+/benchmarks/
+/release_manifest.json
+/scripts/audit_duplication_alleles.py
+/scripts/evaluate_csv_simulation.py

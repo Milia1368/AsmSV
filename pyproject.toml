@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AsmSV"
+version = "1.3.0"
+description = "Assembly-based haplotype-resolved structural variant caller"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "WuChuanmin"}]
+requires-python = ">=3.10"
+dependencies = ["pysam>=0.19", "edlib>=1.3.9"]
+
+[project.optional-dependencies]
+realign = ["pywfa"]
+benchmark = ["truvari==5.3.0"]
+
+[project.urls]
+Repository = "https://github.com/Milia1368/AsmSV"
+Issues = "https://github.com/Milia1368/AsmSV/issues"
+
+[project.scripts]
+asmSV = "asmsv_next.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,26 @@
+{
+  "id": "winnowmap-asm5-paired-v5",
+  "aligner": "winnowmap",
+  "mode": "asm5",
+  "aq": {
+    "mismatch": 19.0,
+    "gap_open": [
+      39.0,
+      81.0
+    ],
+    "gap_extend": [
+      3.0,
+      1.0
+    ],
+    "structural_gap_min": 50,
+    "structural_scale": 10.0
+  },
+  "dp": {
+    "query_gap": 0.25,
+    "excess_overlap_rate": 0.5,
+    "cross_chromosome": 500.0,
+    "inversion": 200.0
+  },
+  "score_unit": "match_equivalent_bp",
+  "schema_version": 5
+}

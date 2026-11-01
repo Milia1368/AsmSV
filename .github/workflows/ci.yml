@@ -1,0 +1,24 @@
+name: Tests and package
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install .
+      - run: python -B -m unittest discover -s tests -v
+      - run: asmSV --help
+      - run: python examples/make_toy_inputs.py --output /tmp/asmsv-toy
+      - run: asmSV --aligner minimap2 --bam1 /tmp/asmsv-toy/hap1.bam --bam2 /tmp/asmsv-toy/hap2.bam --ref /tmp/asmsv-toy/reference.fa -t 2 -o /tmp/asmsv-toy/results.vcf
+      - run: python -m pip wheel . --no-deps --wheel-dir /tmp/wheels

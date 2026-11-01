@@ -1,0 +1,14 @@
+include LICENSE README.md
+prune docs
+include docs/USAGE.md docs/OUTPUT_FORMAT.md
+recursive-include presets *.json
+recursive-include examples *.py
+prune scripts
+include scripts/evaluate_benchmark.py scripts/benchmark_genotypes.py scripts/evaluate_genotypes.py
+recursive-include tests *.py *.json
+prune archive
+prune validation
+prune history
+prune benchmarks
+exclude origin.json release_manifest.json
+recursive-exclude * __pycache__ *.pyc
