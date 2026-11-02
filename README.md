@@ -17,7 +17,7 @@
 
 AsmSV detects structural variants from two haplotype-resolved genome assemblies aligned to the same reference. It takes one BAM per haplotype and writes VCF 4.2 records with genotype and structural annotations.
 
-Version **1.3.1** fixes BAM preparation, shares validated sorting caches between runs, and reports preparation/calling progress. The package name remains **AsmSV**, and the command remains **`asmSV`**.
+Version **1.3.0** fixes BAM preparation, shares validated sorting caches between runs, and reports preparation/calling progress. The package name remains **AsmSV**, and the command remains **`asmSV`**.
 
 ### Features
 
@@ -35,10 +35,10 @@ Requirements: Python **3.10+**, `pysam>=0.19` and `edlib>=1.3.9`. Linux is the t
 Create an environment with a libdeflate-enabled pysam before installing AsmSV. The following Linux setup uses the validated `defaults` build; pip installs edlib with AsmSV:
 
 ```bash
-conda create -y -n asmsv_v1.3.1 --override-channels \
+conda create -y -n asmsv_v1.3.0 --override-channels \
   -c defaults python=3.10 pysam=0.23.3 pip
-conda activate asmsv_v1.3.1
-git clone --branch release/asmsv-v1.3.1 https://github.com/Milia1368/AsmSV.git
+conda activate asmsv_v1.3.0
+git clone --branch release/asmsv-v1.3.0 https://github.com/Milia1368/AsmSV.git
 cd AsmSV
 python -m pip install .
 python -c 'import pysam, pysam.config; print("pysam", pysam.__version__, "libdeflate", pysam.config.HAVE_LIBDEFLATE)'
@@ -46,12 +46,12 @@ asmSV --version
 asmSV --help
 ```
 
-The dependency check should report `libdeflate 1` and `asmSV --version` should report `AsmSV 1.3.1`. The startup log also reports libdeflate availability. Builds without it can sort large BAMs substantially more slowly.
+The dependency check should report `libdeflate 1` and `asmSV --version` should report `AsmSV 1.3.0`. The startup log also reports libdeflate availability. Builds without it can sort large BAMs substantially more slowly.
 
 ### Python virtual environment
 
 ```bash
-git clone --branch release/asmsv-v1.3.1 https://github.com/Milia1368/AsmSV.git
+git clone --branch release/asmsv-v1.3.0 https://github.com/Milia1368/AsmSV.git
 cd AsmSV
 python3 -m venv .venv
 source .venv/bin/activate
@@ -62,6 +62,20 @@ asmSV --help
 Python dependencies are installed automatically; compression performance depends on the pysam build. See [temporary storage and installation checks](docs/USAGE.md#memory-and-temporary-files).
 
 For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
+
+### Update an existing 1.3.0 installation
+
+This branch receives fixes under the existing 1.3.0 version. In a checkout with its runtime dependencies already installed, update the code and reinstall the local source while retaining the conda dependency builds:
+
+```bash
+git pull --ff-only
+python -m pip install --force-reinstall --no-deps .
+asmSV --version
+git rev-parse HEAD
+```
+
+Record the Git commit as well as the version when reproducing results; `asmSV --version` remains `AsmSV 1.3.0` across these branch updates.
+
 
 ## Quick start
 
