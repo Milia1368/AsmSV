@@ -10,6 +10,7 @@ history/
 origin.json
 .venv/
 *.bam
+*.asmsv.qname.bam.json
 *.bai
 *.cram
 *.crai

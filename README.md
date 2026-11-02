@@ -17,7 +17,7 @@
 
 AsmSV detects structural variants from two haplotype-resolved genome assemblies aligned to the same reference. It takes one BAM per haplotype and writes VCF 4.2 records with genotype and structural annotations.
 
-Version **1.3.0** updates the implementation and output annotations of the existing AsmSV project. The package name remains **AsmSV**, and the command remains **`asmSV`**.
+Version **1.3.1** fixes BAM preparation, shares validated sorting caches between runs, and reports preparation/calling progress. The package name remains **AsmSV**, and the command remains **`asmSV`**.
 
 ### Features
 
@@ -28,16 +28,38 @@ Version **1.3.0** updates the implementation and output annotations of the exist
 
 ## Installation
 
-Requirements: Python **3.10+**, `pysam>=0.19` and `edlib>=1.3.9`. Linux is the tested platform. The Python dependencies are installed automatically.
+Requirements: Python **3.10+**, `pysam>=0.19` and `edlib>=1.3.9`. Linux is the tested platform. A pysam build with **libdeflate** is recommended for fast BAM compression.
+
+### Conda installation (recommended)
+
+Create an environment with a libdeflate-enabled pysam before installing AsmSV. The following Linux setup uses the validated `defaults` build; pip installs edlib with AsmSV:
 
 ```bash
-git clone --branch release/asmsv-v1.3.0 https://github.com/Milia1368/AsmSV.git
+conda create -y -n asmsv_v1.3.1 --override-channels \
+  -c defaults python=3.10 pysam=0.23.3 pip
+conda activate asmsv_v1.3.1
+git clone --branch release/asmsv-v1.3.1 https://github.com/Milia1368/AsmSV.git
+cd AsmSV
+python -m pip install .
+python -c 'import pysam, pysam.config; print("pysam", pysam.__version__, "libdeflate", pysam.config.HAVE_LIBDEFLATE)'
+asmSV --version
+asmSV --help
+```
+
+The dependency check should report `libdeflate 1` and `asmSV --version` should report `AsmSV 1.3.1`. The startup log also reports libdeflate availability. Builds without it can sort large BAMs substantially more slowly.
+
+### Python virtual environment
+
+```bash
+git clone --branch release/asmsv-v1.3.1 https://github.com/Milia1368/AsmSV.git
 cd AsmSV
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 asmSV --help
 ```
+
+Python dependencies are installed automatically; compression performance depends on the pysam build. See [temporary storage and installation checks](docs/USAGE.md#memory-and-temporary-files).
 
 For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
 
@@ -61,7 +83,7 @@ asmSV \
   -t 4 -o calls.vcf
 ```
 
-If BAM hard clipping prevents recovery of complete contig sequences, add `--query-fasta1 hap1.fa --query-fasta2 hap2.fa` with indexed original assemblies. BAM and reference sequence names and lengths must agree. The caller creates reusable name-sorted BAM caches automatically.
+If BAM hard clipping prevents recovery of complete contig sequences, add `--query-fasta1 hap1.fa --query-fasta2 hap2.fa` with indexed original assemblies. BAM and reference sequence names and lengths must agree. By default, the caller creates `hap1.asmsv.qname.bam` beside `hap1.bam` and the corresponding cache beside `hap2.bam`. Each run validates the cache and its source receipt before reuse; changing the output directory does not trigger another sort. Use `--work-dir` to choose a different cache directory, or `--sorted-bam1/2` to supply existing grouped BAMs.
 
 See the [user guide](docs/USAGE.md) for parameters, input checks, examples and troubleshooting.
 

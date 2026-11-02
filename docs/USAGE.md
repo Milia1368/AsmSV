@@ -33,7 +33,8 @@ The source mode is inferred from consistent BAM program headers. Use `--aligner-
 | `--min-mapq` | 10 | Minimum alignment MAPQ |
 | `--query-fasta1/2` | None | Indexed original assembly FASTAs |
 | `--sorted-bam1/2` | Automatic | Existing name-sorted BAMs |
-| `--work-dir` | Output-local cache | Reusable sorting cache |
+| `--work-dir` | Beside each input BAM | Override the reusable sorting cache directory |
+| `--scratch-dir` | System temporary directory | BAM sort spill files and temporary structural evidence |
 | `--genotyping` | assembly | assembly, evidence or presence |
 | `--vcf-info` | minimal | minimal or full annotation profile |
 | `--junction-vcf` | Disabled | Write a separate BND projection |
@@ -43,6 +44,19 @@ The source mode is inferred from consistent BAM program headers. Use `--aligner-
 Use `asmSV --help` for all options. Changing the minimum size can affect detection and grouping; it is not equivalent to applying a post-calling VCF size filter.
 
 ## Reuse sorted BAMs
+
+Without `--sorted-bam1/2` or `--work-dir`, each input gets a cache in its own directory:
+
+```text
+/data/hap1.bam  -> /data/hap1.asmsv.qname.bam
+/other/hap2.bam -> /other/hap2.asmsv.qname.bam
+```
+
+Each cache has a `.bam.json` receipt recording the input's resolved path, size and modification time, and the cached BAM's identity. Before reuse, AsmSV checks this receipt, BAM integrity with quickcheck, and its queryname sort header. A missing/stale receipt, changed input or invalid cache triggers regeneration. Complete cache files are published atomically; original inputs are not modified. Automatically managed `*.asmsv.qname.bam` and their receipts may be replaced when validation fails.
+
+Changing the VCF output directory reuses the same input-local caches. For an input directory that is not writable, or to place caches on a local disk, set `--work-dir /path/to/writable/cache`. An explicit work directory overrides input-local caches and retains the previous hash-based cache layout, including reuse of valid older receipts. Version 1.3.0 output-local `cache/` files remain available via `--work-dir /previous/output/cache`.
+
+You can also prepare grouped BAMs yourself. Explicit `--sorted-bam1/2` takes precedence over automatic caching for that haplotype and leaves supplied files unchanged:
 
 ```bash
 samtools sort -n -@ 4 -o hap1.qname.bam hap1.bam
@@ -73,6 +87,23 @@ The optional feature has execution limits. Failure to resolve a structure is ret
 
 Increasing the worker count can increase peak memory. Use `--work-dir` for reusable sorting storage and `--scratch-dir` for temporary files. `--sequence-transport copy` selects process copies instead of automatic shared-memory transport. Original assembly FASTAs can provide sequence access without relying on a complete BAM SEQ.
 
+Name sorting uses the system temporary directory (or `--scratch-dir`) for spill files and publishes each completed BAM beside its input, or in an explicit `--work-dir`. Prefer a local disk with sufficient free space for temporary files. Input-local caches on network storage can still be slower to create; use a local `--work-dir` when appropriate. A first run includes both BAM sorts; a cache hit skips them. Cached-input timings therefore do not describe a first run.
+
+AsmSV logs each preparation/calling stage, cache hits and a heartbeat every 30 seconds while a stage is running. The `.run.json` records the current stage, per-stage wall times, total elapsed seconds, and the pysam/samtools versions and libdeflate availability. A long sort does not mean variant detection has started.
+
+BAM compression speed also depends on how pysam was built. The startup log reports `libdeflate=False` when that acceleration is unavailable. Check the active interpreter with:
+
+```bash
+python -c 'import pysam, pysam.config; print(pysam.__version__, pysam.config.HAVE_LIBDEFLATE)'
+```
+
+For a conda installation, install a libdeflate-enabled pysam before installing AsmSV. One validated version is 0.23.3; the version alone does not guarantee build features. Full environment creation and installation steps are in the [README](../README.md#conda-installation-recommended):
+
+```bash
+conda install --override-channels -c defaults pysam=0.23.3 pip
+python -m pip install .
+```
+
 ## Upgrading from 1.2.x
 
 The distribution name remains AsmSV and the executable remains `asmSV`. This version requires Python 3.10 or newer. Declare the source aligner explicitly and review `asmSV --help` before reusing older commands.
@@ -86,10 +117,12 @@ The current output uses CPX and DELINS annotations and separate event/component/
 | BAM/FASTA dictionary mismatch | Reference names, sequence lengths and reference version |
 | Missing complete query sequence | Supply indexed matching original assembly FASTAs |
 | Query-name groups are not contiguous | Recreate the name-sorted BAM cache |
+| Cannot create a sorting cache beside the input | Supply a writable `--work-dir` or existing `--sorted-bam1/2` |
 | Source/preset conflict | BAM `@PG` commands and `--aligner` / `--aligner-preset` |
 | Empty or partial result | Log, MAPQ, assembly coverage, run completion and partial-call annotations |
 | Unexpected genotype | FORMAT/FT, phase sets and completeness of both assemblies |
 | Excess memory | Worker count, input fragmentation, temporary storage and sequence transport |
+| Slow first run / long BAM sort | Stage log, libdeflate-enabled pysam, local `--scratch-dir`, and reusable `--work-dir`; compare timings with the same cache conditions |
 
 `--mask` removes calls; it is not a repeat-region annotation option. Avoid applying an exclusion BED when the intention is only to label regions.
 

@@ -1,5 +1,6 @@
 """AsmSV: assembly-based haplotype-resolved structural variant calling."""
 import argparse
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime,timezone
 import hashlib
@@ -8,11 +9,14 @@ import logging
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import uuid
 import importlib.util
 import shutil
 import tempfile
+import threading
+import time
 import pysam
 from asmsv_next import __version__
 from asmsv_next.config import SVConfig
@@ -39,9 +43,9 @@ def arguments(argv=None):
     p.add_argument('--sorted-bam1',help='Existing BAM grouped by queryname; never modified')
     p.add_argument('--sorted-bam2',help='Existing BAM grouped by queryname; never modified')
     p.add_argument('--output','-o',default='results.vcf');p.add_argument('--threads','-t',type=int,default=4)
-    p.add_argument('--work-dir',help='Own queryname sort cache; defaults to output directory/cache')
+    p.add_argument('--work-dir',help='Override the queryname BAM cache directory; by default each cache is stored beside its input BAM')
     p.add_argument('--sequence-transport',choices=('auto','copy'),default='auto',help='Share large BAM-derived query sequences when /dev/shm has space; copy uses the original process transport')
-    p.add_argument('--scratch-dir',help='Temporary structural evidence directory; defaults to the system temporary directory. Final JSONL evidence is retained with the VCF')
+    p.add_argument('--scratch-dir',help='Temporary BAM sorting and structural evidence directory; defaults to the system temporary directory. Final JSONL evidence is retained with the VCF')
     p.add_argument('--trace-dir',help='Optional per-contig AQ, DP and candidate diagnostics without sequences')
     p.add_argument('--min-mapq',type=int,default=10);p.add_argument('--min-sv',type=int,default=30)
     p.add_argument('--max-sv',type=int,default=1500000,help='Retained legacy duplication OVERSIZE threshold, not a universal size filter')
@@ -86,24 +90,87 @@ def file_digest(path):
     return h.hexdigest()
 
 
-def sorted_bam(path,provided,work,threads):
+@contextmanager
+def run_stage(manifest,record,name):
+    """Expose long native-library calls without relying on their stderr output."""
+    manifest['stage']=name;save_json(record,manifest)
+    started=time.monotonic();stopped=threading.Event()
+    def heartbeat():
+        while not stopped.wait(30):
+            logger.info('%s: still running (%.1f s)',name,time.monotonic()-started)
+    thread=threading.Thread(target=heartbeat,daemon=True)
+    logger.info('Starting %s',name);thread.start()
+    success=False
+    try:
+        yield
+        success=True
+    finally:
+        stopped.set();thread.join()
+        elapsed=time.monotonic()-started
+        manifest.setdefault('stage_seconds',{})[name]=elapsed
+        save_json(record,manifest)
+        logger.info('%s %s in %.2f s','Finished' if success else 'Stopped',name,elapsed)
+
+
+def sorted_bam(path,provided,work,threads,scratch_dir=None):
     if provided:
         if not Path(provided).is_file():raise FileNotFoundError(provided)
+        pysam.quickcheck(str(provided))
+        logger.info('Using supplied queryname BAM: %s',provided)
         return str(Path(provided).resolve())
     proof=identity(path);key=hashlib.sha256(json.dumps(proof,sort_keys=True).encode()).hexdigest()[:20]
-    out=work/(key+'.qname.bam');receipt=work/(key+'.json')
-    if out.exists() and receipt.exists() and json.loads(receipt.read_text())==proof:
-        pysam.quickcheck(str(out));return str(out)
-    tmp=work/(key+'.'+uuid.uuid4().hex+'.bam')
+    source=Path(proof['path'])
+    if work is None:
+        out=source.with_name(source.stem+'.asmsv.qname.bam')
+        receipt=Path(str(out)+'.json')
+    else:
+        work=Path(work).expanduser().resolve()
+        work.mkdir(parents=True,exist_ok=True)
+        # Preserve the pre-1.3.1 explicit --work-dir layout and valid receipts.
+        out=work/(key+'.qname.bam');receipt=work/(key+'.json')
+    if out.resolve()==source:raise ValueError('Sorting cache must not overwrite the input BAM')
+    if out.exists() and receipt.exists():
+        try:
+            saved=json.loads(receipt.read_text())
+            if saved==proof or (saved.get('schema')=='asmsv-sort-cache-v1' and
+                    saved.get('source')==proof and saved.get('cache')==identity(out)):
+                pysam.quickcheck(str(out))
+                with pysam.AlignmentFile(str(out),'rb') as stream:
+                    if stream.header.to_dict().get('HD',{}).get('SO')!='queryname':
+                        raise ValueError('Cached BAM does not declare queryname sorting')
+                logger.info('Reusing queryname BAM cache: %s',out);return str(out)
+            logger.info('Sorting cache is stale; rebuilding %s',out)
+        except (OSError,ValueError,AttributeError,pysam.SamtoolsError) as error:
+            logger.warning('Sorting cache validation failed for %s: %s; rebuilding',out,error)
+    elif out.exists():
+        logger.info('Sorting cache has no source receipt; rebuilding %s',out)
+    tmp=out.with_name(out.name+'.'+uuid.uuid4().hex+'.tmp.bam')
     try:
-        pysam.sort('-n','-@',str(threads),'-m','256M','-T',str(tmp)+'.sort','-o',str(tmp),str(path))
-        pysam.quickcheck(str(tmp));os.replace(tmp,out);save_json(receipt,proof)
+        try:tmp.touch(exist_ok=False)
+        except PermissionError as error:
+            raise PermissionError(f'Cannot create sorting cache beside {path}; use --work-dir with a writable directory or --sorted-bam1/2') from error
+        # Spill files can be several times larger than the input. Keep them off
+        # an output-local network filesystem, while publishing the cache atomically.
+        with tempfile.TemporaryDirectory(prefix='asmsv-sort-',dir=scratch_dir) as sorting:
+            logger.info('Name-sorting %s; temporary files: %s; cache: %s',path,sorting,out)
+            # Native pysam sorting can hold the GIL, suppressing progress and
+            # delaying KeyboardInterrupt. A child keeps the controller responsive;
+            # subprocess.run kills/reaps it on interruption before scratch cleanup.
+            subprocess.run([sys.executable,'-c',
+                'import sys,pysam; pysam.sort(*sys.argv[1:],catch_stdout=False)',
+                '-n','-@',str(threads),'-m','256M','-T',str(Path(sorting)/'chunk'),
+                '-o',str(tmp),str(path)],check=True)
+        pysam.quickcheck(str(tmp))
+        if identity(path)!=proof:raise ValueError('Input BAM changed during name sorting; retry with a stable input: '+str(path))
+        os.replace(tmp,out)
+        save_json(receipt,dict(schema='asmsv-sort-cache-v1',source=proof,cache=identity(out)))
     finally:
         if tmp.exists():tmp.unlink()
     return str(out)
 
 
 def run(argv=None):
+    started=time.monotonic()
     a=arguments(argv);out=Path(a.output).expanduser().resolve()
     if out.exists() and out.is_dir():out=out/'results.vcf'
     out.parent.mkdir(parents=True,exist_ok=True)
@@ -115,6 +182,8 @@ def run(argv=None):
     manifest=dict(status='RUNNING',started_at=datetime.now(timezone.utc).isoformat(),argv=list(argv or sys.argv[1:]),
         implementation=str(Path(__file__).resolve().parent),inputs={},csv_policy='finite-structure-v2',
         annotation_schema='asmsv-sv-annotation-v3',vcf_info=a.vcf_info,
+        runtime=dict(python=sys.version,pysam=pysam.__version__,samtools=pysam.__samtools_version__,
+            libdeflate=bool(getattr(pysam.config,'HAVE_LIBDEFLATE',False))),stage_seconds={},
         genotyping=a.genotyping,sample=a.sample)
     manifest['implementation_sha256']={path.name:file_digest(path) for path in sorted(Path(__file__).resolve().parent.glob('*.py'))}
     record=Path(str(out)+'.run.json')
@@ -124,6 +193,10 @@ def run(argv=None):
             value=getattr(a,key)
             if value:manifest['inputs'][key]=identity(value)
         save_json(record,manifest)
+        logger.info('AsmSV %s; pysam %s; samtools %s; libdeflate=%s',__version__,
+            pysam.__version__,pysam.__samtools_version__,manifest['runtime']['libdeflate'])
+        if not manifest['runtime']['libdeflate']:
+            logger.warning('This pysam build lacks libdeflate; BAM sorting/compression can be substantially slower. See docs/USAGE.md')
         with pysam.FastaFile(a.ref) as ref:
             sources=inspect_headers((a.bam1,a.bam2),ref,a.aligner)
             modes={mode_from_command(s.command_line) for s in sources if mode_from_command(s.command_line)}
@@ -152,21 +225,29 @@ def run(argv=None):
                 preset_sha256=preset.fingerprint,mode_origin='user' if a.aligner_preset else 'header' if modes else 'declared-tool-default')
             save_json(str(out)+'.preset.json',preset.to_dict());save_json(record,manifest)
             logger.info('Resolved %s; score unit=%s; preset SHA256=%s',preset.id,preset.score_unit,preset.fingerprint)
-            work=Path(a.work_dir).resolve() if a.work_dir else out.parent/'cache'
-            work.mkdir(parents=True,exist_ok=True)
+            work=Path(a.work_dir).expanduser().resolve() if a.work_dir else None
             if a.scratch_dir:Path(a.scratch_dir).mkdir(parents=True,exist_ok=True)
             scratch=tempfile.TemporaryDirectory(prefix='asmsv-structures-',dir=a.scratch_dir)
             structure_dir=Path(scratch.name);SVConfig.STRUCTURE_DIR=str(structure_dir)
             manifest['structure_dir']=str(structure_dir)
             manifest['structure_scratch_retained']=False
             manifest['detector_config']['STRUCTURE_DIR']=str(structure_dir)
-            paths=[sorted_bam(a.bam1,a.sorted_bam1,work,a.threads),sorted_bam(a.bam2,a.sorted_bam2,work,a.threads)]
+            paths=[]
+            for label,path,provided in (('hap1',a.bam1,a.sorted_bam1),('hap2',a.bam2,a.sorted_bam2)):
+                with run_stage(manifest,record,'prepare_'+label):
+                    paths.append(sorted_bam(path,provided,work,a.threads,a.scratch_dir))
+                    manifest['sorted_bams']=list(paths)
             inspect_headers(paths,ref,a.aligner)
             trace=str(Path(a.trace_dir).resolve()) if a.trace_dir else None
             if trace:Path(trace).mkdir(parents=True,exist_ok=True)
             mask=BedMaskFilter(a.mask)
-            h1,s1=run_haplotype(paths[0],'hap1',a.threads,mask,a.query_fasta1,trace)
-            h2,s2=run_haplotype(paths[1],'hap2',a.threads,mask,a.query_fasta2,trace)
+            with run_stage(manifest,record,'call_hap1'):
+                h1,s1=run_haplotype(paths[0],'hap1',a.threads,mask,a.query_fasta1,trace)
+            with run_stage(manifest,record,'call_hap2'):
+                h2,s2=run_haplotype(paths[1],'hap2',a.threads,mask,a.query_fasta2,trace)
+            writing_started=time.monotonic()
+            manifest['stage']='genotype_and_write';save_json(record,manifest)
+            logger.info('Starting cross-haplotype genotyping and output')
             (variants, aliases) = cluster_structural_calls(h1, h2)
             for c in variants:
                 if c.info.get('PARENT_EVENT'):
@@ -226,12 +307,15 @@ def run(argv=None):
             with pysam.VariantFile(str(out)) as stream:rows=sum(1 for _ in stream)
             manifest.update(status='COMPLETE',contigs=s1+s2,output_rows=rows,
                 output_sha256=file_digest(out),sorted_bams=paths)
+            manifest['stage_seconds']['genotype_and_write']=time.monotonic()-writing_started
+            manifest['stage']='complete'
             logger.info('Completed: %s; %d VCF records',out,rows)
     except BaseException as error:
         manifest.update(status='FAILED',error=f'{type(error).__name__}: {error}')
         logger.exception('Caller failed')
         raise
     finally:
+        manifest['elapsed_seconds']=time.monotonic()-started
         manifest['finished_at']=datetime.now(timezone.utc).isoformat();save_json(record,manifest)
         if scratch is not None:scratch.cleanup()
     return 0

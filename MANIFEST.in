@@ -12,3 +12,4 @@ prune history
 prune benchmarks
 exclude origin.json release_manifest.json
 recursive-exclude * __pycache__ *.pyc
+global-exclude *.asmsv.qname.bam.json
