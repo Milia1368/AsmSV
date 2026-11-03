@@ -116,6 +116,7 @@ def _write_vcf_body(sv_list, output_path, header_contigs, fasta,view='main',info
                 ('ATOM_ID','.','String','Stable input evidence identifiers'),
                 ('PARENT_EVENT','.','String','Confirmed canonical parent events'),
                 ('CONTEXT_ID','.','String','Candidate contexts; do not imply a shared event'),
+                ('REGION_ID','.','String','Unresolved-region annotation IDs in companion regions.jsonl; not variant or event IDs'),
                 ('RESOLUTION',1,'String','RESOLVED PARTIAL or UNRESOLVED'),
                 ('DECOMPOSITION',1,'String','SINGLE SEPARABLE COUPLED or UNDETERMINED'),
                 ('EVIDENCE_SCOPE',1,'String','Scope of evidence evaluated'),
@@ -142,6 +143,7 @@ def _write_vcf_body(sv_list, output_path, header_contigs, fasta,view='main',info
                 ('SOURCE_ISSUE',1,'String','Unresolved source annotation reason'),
                 ('RECHECK_METHOD',1,'String','EXACT KMER EXACT_INVERSE EXACT_SEPARATOR or optional WFA'),
                 ('JUNCTION_ID',1,'String','One physical adjacency; BND mates share this identifier')])
+            info_defs.append(('BND_INSERTION',1,'String','Known junction sequence in local reference orientation; encoded in BND ALT'))
             info_defs.extend([('QUERY_START',1,'Integer','0-based assembly support start'),('QUERY_END',1,'Integer','0-based exclusive assembly support end')])
             info_defs = header_definitions(info_defs, info_level)
             info_lines = [f'##INFO=<ID={i_id},Number={i_num},Type={i_type},Description="{i_desc}">\n' for (i_id, i_num, i_type, i_desc) in info_defs]

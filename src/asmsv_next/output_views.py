@@ -1,19 +1,26 @@
 """Read-only breakend projections of canonical structural evidence."""
 from asmsv_next.structures import SVCandidate
 from asmsv_next.structural_detection import junction,identifier
+from asmsv_next.sequence_check import reverse_complement
 
 
 def junction_candidates(bundle,aliases):
     name=bundle['query'];haplotype=bundle['haplotype'];records=[];seen={}
-    def emit(edge,context=None,parent=None,atom_id=None,partial=False):
+    def emit(edge,context=None,parent=None,atom_id=None,partial=False,region=None):
         # Group complete adjacency pairs by exact geometry. Independent fuzzy
         # clustering of their two breakends can leave dangling MATEIDs.
         ports=sorted((edge['left'],edge['right']),key=lambda p:(p['chrom'],p['position'],p['side']))
-        key=identifier('ADJ',ports,partial)
+        inserted=edge.get('inserted_sequence','')
+        if ports[0]!=edge['left']:inserted=reverse_complement(inserted)
+        # Preserve previous IDs for sequence-free edges. Different known
+        # junction alleles must not collapse solely because their ports agree.
+        key=identifier('ADJ',ports,partial,inserted) if inserted else identifier('ADJ',ports,partial)
         if key in seen:
             for candidate in seen[key]:
-                for field,value in [('CONTEXT_ID',context),('PARENT_EVENT',aliases.get(parent,parent)),('ATOM_ID',atom_id)]:
-                    if value:candidate.info[field]=','.join(sorted((set(str(candidate.info.get(field,'')).split(','))|{value})-{''}))
+                for field,value in [('CONTEXT_ID',context),('PARENT_EVENT',aliases.get(parent,parent)),('ATOM_ID',atom_id),('REGION_ID',region)]:
+                    if value:
+                        combined=set(str(candidate.info.get(field,'')).split(','))|set(str(value).split(','))
+                        candidate.info[field]=','.join(sorted(combined-{''}))
             return
         seen[key]=[]
         for suffix,local,remote,mate in [('a',ports[0],ports[1],'b'),('b',ports[1],ports[0],'a')]:
@@ -26,6 +33,10 @@ def junction_candidates(bundle,aliases):
             if context:info['CONTEXT_ID']=context
             if parent:info['PARENT_EVENT']=aliases.get(parent,parent)
             if atom_id:info['ATOM_ID']=atom_id
+            if region:info['REGION_ID']=region
+            if inserted:
+                outgoing=inserted if suffix=='a' else reverse_complement(inserted)
+                info['BND_INSERTION']=outgoing if local['side']=='R' else reverse_complement(outgoing)
             if edge.get('query_support'):
                 info['QUERY_START'],info['QUERY_END']=sorted(edge['query_support'])
             candidate=SVCandidate('BND',local['chrom'],max(1,position),0,name,info,
@@ -34,7 +45,7 @@ def junction_candidates(bundle,aliases):
             seen[key].append(candidate)
     for context in bundle['contexts']:
         for edge in context.get('junctions',[]):
-            emit(edge,context['context_id'],context.get('event_id'),partial=context['resolution']!='RESOLVED')
+            emit(edge,context['context_id'],context.get('event_id'),partial=context['resolution']!='RESOLVED',region=context.get('region_id'))
     for atom in bundle['atoms']:
         if atom.get('parent_event') or atom['type'] not in ('INS','DEL','DELINS'):continue
         parts=[p for p in atom['parts'] if p[0] in (1,2)]
@@ -45,5 +56,5 @@ def junction_candidates(bundle,aliases):
             left=dict(chrom=atom['chrom'],position=rs,side='R')
             right=dict(chrom=atom['chrom'],position=re,side='L')
             edge=junction(haplotype,name,atom['atom_id'],left,right,[qs,qe],str(index))
-            emit(edge,atom_id=atom['atom_id'])
+            emit(edge,atom_id=atom['atom_id'],region=atom.get('info',{}).get('REGION_ID'))
     return records

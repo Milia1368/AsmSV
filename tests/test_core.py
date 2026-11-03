@@ -38,12 +38,16 @@ def node(qs,qe,rs,score,chrom='chr1',strand='+'):
 class AQTests(unittest.TestCase):
     def setUp(self):SVConfig.CALLER_PRESET=resolve_preset('minimap2');SVConfig.MIN_MAPQ=10
 
-    def test_source_modes_and_unit_normalization(self):
-        self.assertEqual(resolve_preset('minimap2','asm5').aq.mismatch,19)
-        self.assertEqual(resolve_preset('winnowmap2','asm10').aq.mismatch,9)
-        self.assertEqual(resolve_preset('vacmap').aq.mismatch,2)
-        p=resolve_preset('minimap2','asm5',('-A','2','-B6','-O','4,24','-E2,1'))
-        self.assertEqual((p.aq.mismatch,p.aq.gap_open,p.aq.gap_extend),(3,(2,12),(1,.5)))
+    def test_shared_scoring_keeps_source_identity_without_mode_coupling(self):
+        presets=[resolve_preset(tool,mode) for tool,modes in (
+            ('minimap2',('asm5','asm10','asm20')),('winnowmap2',('asm5','asm10','asm20')),
+            ('vacmap',('asm',))) for mode in modes]
+        self.assertTrue(all((p.aq,p.dp)==(AQPreset(),DPPreset()) for p in presets))
+        self.assertEqual(len({p.scoring_fingerprint for p in presets}),1)
+        self.assertEqual(len({p.fingerprint for p in presets}),len(presets))
+        self.assertEqual([(p.aligner,p.mode) for p in presets][-1],('vacmap','asm'))
+        self.assertEqual(presets[3].aligner,'winnowmap')
+        with self.assertRaises(ValueError):resolve_preset('vacmap','asm20')
 
     def test_continuous_gap_boundary_and_monotonicity(self):
         p=SVConfig.CALLER_PRESET.aq
@@ -138,7 +142,13 @@ class AQTests(unittest.TestCase):
             self.assertEqual(resolve_preset('vacmap',preset_file=f).fingerprint,p.fingerprint)
             f.write_text(json.dumps({'aq':{'structural_scale':12}}))
             partial=resolve_preset('vacmap',preset_file=f)
-            self.assertEqual((partial.aq.mismatch,partial.aq.structural_scale),(2,12))
+            self.assertEqual((partial.aq.mismatch,partial.aq.structural_scale),(19,12))
+            f.write_text(json.dumps({'aq':{'mismatch':19,'gap_open':[39,81],'gap_extend':[3,1]}}))
+            self.assertEqual(resolve_preset('vacmap',preset_file=f).scoring_fingerprint,p.scoring_fingerprint)
+            f.write_text(json.dumps({'aq':{'mismatch':2,'gap_open':[2,12],'gap_extend':[1,.5]}}))
+            custom=resolve_preset('vacmap',preset_file=f)
+            self.assertEqual((custom.aq.mismatch,custom.aq.gap_open,custom.aq.gap_extend),(2,(2,12),(1,.5)))
+            self.assertNotEqual(custom.scoring_fingerprint,p.scoring_fingerprint)
         for kwargs in ({'mismatch':float('nan')},{'structural_gap_min':0},{'gap_open':()}):
             with self.assertRaises(ValueError):AQPreset(**kwargs)
         with self.assertRaises(ValueError):DPPreset(query_gap=-1)
@@ -301,14 +311,15 @@ def fixture(directory,aligner,hardclip=False):
 
 class InputAndCLITests(unittest.TestCase):
 
-    def test_header_mode_and_explicit_scoring_overrides_are_applied_without_a_preset_file(self):
+    def test_different_upstream_score_overrides_are_provenance_without_a_preset_file(self):
         with tempfile.TemporaryDirectory() as t:
             d=Path(t);ref,_=fixture(d,'minimap2')
             for hap in (1,2):
                 path=d/f'hap{hap}.bam'
                 with pysam.AlignmentFile(str(path),'rb') as stream:
                     header=stream.header.to_dict();reads=list(stream)
-                header['PG'][0]['CL']='minimap2 -ax asm10 --eqx -A2 -B6 -O4,24 -E2,1'
+                flags='-A2 -B6 -O4,24 -E2,1' if hap==1 else '-A3 -B15 -O6,36 -E3,1.5'
+                header['PG'][0]['CL']='minimap2 -ax asm10 --eqx '+flags
                 with pysam.AlignmentFile(str(path),'wb',header=header) as out:
                     for r in reads:out.write(r)
             target=d/'result.vcf'
@@ -318,9 +329,14 @@ class InputAndCLITests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             manifest=json.loads(Path(str(target)+'.run.json').read_text())
             self.assertEqual((manifest['preset']['mode'],manifest['mode_origin']),('asm10','header'))
-            self.assertEqual(manifest['preset']['aq']['mismatch'],3)
-            self.assertEqual(manifest['preset']['aq']['gap_open'],[2,12])
-            self.assertEqual(manifest['preset']['aq']['gap_extend'],[1,.5])
+            self.assertEqual(manifest['preset']['aq']['mismatch'],19)
+            self.assertEqual(manifest['preset']['aq']['gap_open'],[39,81])
+            self.assertEqual(manifest['preset']['aq']['gap_extend'],[3,1])
+            self.assertIn('-B6',manifest['source_headers'][0]['overrides'])
+            self.assertIn('-B15',manifest['source_headers'][1]['overrides'])
+            self.assertEqual(manifest['scoring_policy'],'fixed-common')
+            self.assertFalse(manifest['upstream_scoring_inherited'])
+            self.assertEqual(manifest['scoring_sha256'],resolve_preset('vacmap').scoring_fingerprint)
 
     def test_source_aware_end_to_end_three_tools(self):
         for tool in ('minimap2','winnowmap','vacmap'):
@@ -339,7 +355,7 @@ class InputAndCLITests(unittest.TestCase):
                 self.assertEqual(manifest['preset']['schema_version'],5)
                 detail=json.loads(next(trace.glob('*.json')).read_text())
                 self.assertEqual(detail['blocks'][0]['source']['mode'],'asm' if tool=='vacmap' else 'asm5')
-                self.assertEqual(manifest['preset']['aq']['mismatch'],2 if tool=='vacmap' else 19)
+                self.assertEqual(manifest['preset']['aq']['mismatch'],19)
 
     def test_hard_clip_requires_original_sequence_and_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as t:

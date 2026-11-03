@@ -103,6 +103,8 @@ class DetectionResult:
     cigar_scans: int
     cigar_seconds: float
     projections: list = field(default_factory=list)
+    regions: list = field(default_factory=list)
+    region_seconds: float = 0.
 
 
 class Detector:
@@ -810,7 +812,7 @@ class Detector:
             context['issues'].append('QUERY_OWNERSHIP_CONFLICT');return
         p=dict(chrom=a.ref_name,position=exit_port(a),side='R' if a.strand=='+' else 'L')
         q=dict(chrom=b.ref_name,position=entry(b),side='L' if b.strand=='+' else 'R')
-        context['junctions']=[junction(self.haplotype,self.name,context['context_id'],p,q)]
+        context['junctions']=[junction(self.haplotype,self.name,context['context_id'],p,q,[a.qe,b.qs])]
         edge=context['junctions'][0]
         for suffix,local,remote,mate in [('a',p,q,'b'),('b',q,p,'a')]:
             position=local['position']+(1 if local['side']=='L' else 0)
@@ -953,7 +955,6 @@ class Detector:
             context['issues']=sorted(set(context['issues']))
             if context['resolution']!='RESOLVED':
                 context['resolution']='PARTIAL' if any(context.get(k) for k in ('atom_ids','segments','junctions')) else 'UNRESOLVED'
-            if context['issues'] and context['member_block_indices']:context['region_annotations'].append('CRR')
         for atom in self.atoms.values():
             if not atom.parent:
                 self.events.append(dict(event_id=atom.atom_id,svtype=atom.candidate.type,context_ids=sorted(atom.contexts),
@@ -961,12 +962,16 @@ class Detector:
                     query_span=list(atom.query),components=[],basis_atom=atom.atom_id,
                     info={k:v for k,v in atom.candidate.info.items() if k!='SEQ'}))
         calls=[atom.candidate for atom in self.atoms.values()]+self.parents
+        from asmsv_next.unresolved_regions import annotate_regions
+        region_started=time.perf_counter()
+        regions=annotate_regions(self,calls+self.projections)
+        region_seconds=time.perf_counter()-region_started
         atoms=[dict(atom_id=a.atom_id,type=a.candidate.type,chrom=a.candidate.chrom,pos=a.candidate.pos,
             end=a.candidate.end,length=a.candidate.sv_len,query=list(a.query),reference_consumption=a.reference_parts,
             parts=a.parts,block_index=a.block_index,parent_event=a.parent or None,
             info={k:v for k,v in a.candidate.info.items() if k!='SEQ'},
             contexts=sorted(a.contexts),sequence_sha256=hashlib.sha256(a.candidate.info.get('SEQ','').encode()).hexdigest()) for a in self.atoms.values()]
-        return DetectionResult(calls,self.contexts,self.events,atoms,len(self.cache),self.cigar_seconds,self.projections)
+        return DetectionResult(calls,self.contexts,self.events,atoms,len(self.cache),self.cigar_seconds,self.projections,regions,region_seconds)
 
 
 def detect_structures(chain,strand,backbone,read_name,sequence,reference=None,haplotype=''):

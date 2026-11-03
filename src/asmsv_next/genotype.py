@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def candidate_key(sv):
     """Total order for equal-position candidates, independent of worker completion."""
-    metadata = {k: v for (k, v) in sv.info.items() if k not in ('SEQ', 'ALLELE_ALT_SEQ')}
+    metadata = {k: v for (k, v) in sv.info.items() if k not in ('SEQ', 'ALLELE_ALT_SEQ', 'REGION_ID')}
     extra = json.dumps(metadata, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=lambda x: sorted(x) if isinstance(x, set) else str(x))
     return (sv.chrom, sv.pos, sv.sv_len, sv.end, sv.type, sv.raw_type, str(sv.info.get('CHR2', '')), int(sv.info.get('POS2', 0)), str(sv.info.get('STRANDS', '')), str(sv.info.get('SEQ', '')), str(sv.info.get('ALLELE_ALT_SEQ', '')), sv.filter, sv.id, sv.mateid, tuple(sorted(sv.read_names)), tuple(sorted(sv.sources)), extra)
 
@@ -218,7 +218,7 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     new_sv.genotype = gt
     new_sv.info['SUPPORT_H1'] = len(hap_names[0]) or int(has_h1)
     new_sv.info['SUPPORT_H2'] = len(hap_names[1]) or int(has_h2)
-    for key in ('ATOM_ID','CONTEXT_ID','PARENT_EVENT'):
+    for key in ('ATOM_ID','CONTEXT_ID','PARENT_EVENT','REGION_ID'):
         values={part for sv in cluster for part in str(sv.info.get(key,'')).split(',') if part}
         if values:new_sv.info[key]=','.join(sorted(values))
     if any(sv.info.get('ROLE')=='SIMPLE' for sv in cluster):new_sv.info['ROLE']='SIMPLE'

@@ -140,15 +140,16 @@ class SVCandidate:
         if not chr2 or not pos2:
             return '<TRA>'
         strands = self.info.get('STRANDS', '+-')
+        inserted = self.info.get('BND_INSERTION', '')
         p = f'{chr2}:{pos2}'
         if strands == '++':
-            return f'{ref_base}[{p}['
+            return f'{ref_base}{inserted}[{p}['
         elif strands == '--':
-            return f']{p}]{ref_base}'
+            return f']{p}]{inserted}{ref_base}'
         elif strands == '+-':
-            return f'{ref_base}]{p}]'
+            return f'{ref_base}{inserted}]{p}]'
         elif strands == '-+':
-            return f'[{p}[{ref_base}'
+            return f'[{p}[{inserted}{ref_base}'
         return '<TRA>'
 
     def _safe_fetch_ref(self, fasta, chrom: str, start: int, end: int) -> str:

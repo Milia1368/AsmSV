@@ -8,7 +8,7 @@ import sys
 import unittest
 
 from asmsv_next.aq import RawAlignment,EvidenceRoot
-from asmsv_next.presets import resolve_preset
+from asmsv_next.presets import AQPreset,resolve_preset
 from asmsv_next.alignment import AlignedSegment
 from asmsv_next.config import SVConfig
 from asmsv_next.structural_detection import map_port,mapped_parts
@@ -28,8 +28,10 @@ def exact(value):
 class PackedIndexTests(unittest.TestCase):
     def test_random_sliced_scores_and_views_are_bitwise_equal_to_frozen_index(self):
         rng=random.Random(11012026)
-        for mode in ('asm5','asm10','asm20'):
-            preset=resolve_preset('minimap2',mode).aq
+        # Exercise different scoring functions even though source modes now
+        # share the same default. These are explicit evaluator coefficients.
+        for preset in (AQPreset(),AQPreset(mismatch=9,gap_open=(16,41),gap_extend=(2,1)),
+                       AQPreset(mismatch=4,gap_open=(6,26),gap_extend=(2,1))):
             for case in range(40):
                 body=[(7,100)]
                 for _ in range(25):body.extend([(rng.choice((1,2,8)),rng.randrange(1,400)),(7,rng.randrange(1,300))])

@@ -1,4 +1,4 @@
-"""Minimal scoring parameters; one evaluated AQ/DP algorithm, schema 5."""
+"""Common assembly scoring; upstream identity is provenance, schema 5."""
 from dataclasses import asdict, dataclass, fields
 import hashlib
 import json
@@ -87,14 +87,15 @@ class CallerPreset:
     def fingerprint(self):
         return hashlib.sha256(json.dumps(self.to_dict(),sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
-
-# Pinned source definitions: minimap2 2.28, Winnowmap 72403b3, VACmap 4a80475.
-# These describe ordinary base-alignment costs, not the aligners' chaining scores.
-_ASSEMBLY={
-    'asm5': (1.0,19.0,(39.0,81.0),(3.0,1.0)),
-    'asm10':(1.0,9.0,(16.0,41.0),(2.0,1.0)),
-    'asm20':(1.0,4.0,(6.0,26.0),(2.0,1.0)),
-}
+    @property
+    def scoring_fingerprint(self):
+        """Hash numerical evaluation independently of its source declaration."""
+        aq=asdict(self.aq)
+        for key in ('mismatch','structural_scale'):aq[key]=float(aq[key])
+        for key in ('gap_open','gap_extend'):aq[key]=tuple(float(v) for v in aq[key])
+        data=dict(aq=aq,dp={key:float(value) for key,value in asdict(self.dp).items()},score_unit=self.score_unit,
+            schema_version=self.schema_version)
+        return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
 def canonical_aligner(name):
@@ -104,41 +105,15 @@ def canonical_aligner(name):
     return name
 
 
-def source_costs(aligner, mode, overrides=()):
-    aligner=canonical_aligner(aligner)
-    if aligner=='vacmap':
-        if mode!='asm': raise ValueError('VACmap currently supports the assembly profile asm')
-        if overrides: raise ValueError('VACmap does not use minimap-style -A/-B/-O/-E overrides')
-        return (2.0,4.0,(4.0,24.0),(2.0,1.0))
-    if mode not in _ASSEMBLY: raise ValueError(f'Unsupported {aligner} assembly preset: {mode}')
-    a,b,opens,extends=_ASSEMBLY[mode]
-    values={'-A':a,'-B':b,'-O':opens,'-E':extends}
-    tokens=list(overrides);i=0
-    while i<len(tokens):
-        token=tokens[i];key=token[:2]
-        if key in values:
-            if len(token)==2:
-                i+=1
-                if i>=len(tokens): raise ValueError('Missing score override value: '+token)
-                value=tokens[i]
-            else:value=token[2:]
-            values[key]=tuple(float(x) for x in value.split(',')) if key in ('-O','-E') else float(value)
-        i+=1
-    a,b,opens,extends=(values[k] for k in ('-A','-B','-O','-E'))
-    if a<=0 or not math.isfinite(a): raise ValueError('Source match reward must be positive')
-    if len(opens)!=len(extends):
-        if len(opens)==1: opens=opens*len(extends)
-        elif len(extends)==1: extends=extends*len(opens)
-        else: raise ValueError('Incompatible source gap override arrays')
-    return a,b,opens,extends
-
-
-def resolve_preset(aligner,mode=None,overrides=(),preset_file=None):
+def resolve_preset(aligner,mode=None,*,preset_file=None):
     aligner=canonical_aligner(aligner)
     mode=mode or ('asm' if aligner=='vacmap' else 'asm5')
-    a,b,opens,extends=source_costs(aligner,mode,overrides)
-    aq=AQPreset(mismatch=b/a,gap_open=tuple(x/a for x in opens),gap_extend=tuple(x/a for x in extends))
-    result=CallerPreset(f'{aligner}-{mode}-paired-v5',aligner,mode,aq,DPPreset())
+    modes=('asm',) if aligner=='vacmap' else ('asm5','asm10','asm20')
+    if mode not in modes:raise ValueError(f'Unsupported {aligner} assembly source mode: {mode}')
+    # Full-genome cross-over evaluation selects the same caller scoring for
+    # all supported sources. @PG modes/cost flags describe how BAMs were made;
+    # they never supply numerical defaults to this evaluator.
+    result=CallerPreset('common-assembly-hq-v5',aligner,mode,AQPreset(),DPPreset())
     if preset_file:
         data=json.loads(Path(preset_file).read_text())
         if type(data.get('schema_version',5)) is not int or data.get('schema_version',5)!=5:
@@ -154,7 +129,7 @@ def resolve_preset(aligner,mode=None,overrides=(),preset_file=None):
             extra=set(custom)-{f.name for f in fields(cls)}
             if extra:raise ValueError('Unknown or removed '+key+' parameters: '+str(sorted(extra)))
             values[key]=cls(**{**asdict(getattr(result,key)),**custom})
-        result=CallerPreset(data.get('id','custom-paired-v5'),aligner,mode,
+        result=CallerPreset(data.get('id','custom-assembly-v5'),aligner,mode,
             values['aq'],values['dp'],data.get('score_unit',result.score_unit))
     return result
 

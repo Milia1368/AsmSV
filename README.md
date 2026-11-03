@@ -17,12 +17,13 @@
 
 AsmSV detects structural variants from two haplotype-resolved genome assemblies aligned to the same reference. It takes one BAM per haplotype and writes VCF 4.2 records with genotype and structural annotations.
 
-Version **1.3.0** fixes BAM preparation, shares validated sorting caches between runs, and reports preparation/calling progress. The package name remains **AsmSV**, and the command remains **`asmSV`**.
+Version **1.3.0** uses one common AQ/DP scoring template across supported assembly aligners, retains incomplete-region evidence, and provides a CSV browser/export command. BAM sorting caches remain reusable between runs. The package name remains **AsmSV**, and the command remains **`asmSV`**. See [release changes and compatibility](CHANGELOG.md).
 
 ### Features
 
 - INS, DEL, INV and DUP detection, with DELINS and supported composite structures represented explicitly.
 - Main events, linked components and a reference-relative INS/DEL output view.
+- Unresolved-region annotations with explicit boundaries, members and available connections.
 - Genotype evidence filters and phase-set annotations where supported by the assemblies.
 - Configurable inputs, multithreaded execution and reusable BAM sorting caches.
 
@@ -63,18 +64,20 @@ Python dependencies are installed automatically; compression performance depends
 
 For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
 
-### Update an existing 1.3.0 installation
+### Update an existing installation
 
-This branch receives fixes under the existing 1.3.0 version. In a checkout with its runtime dependencies already installed, update the code and reinstall the local source while retaining the conda dependency builds:
+In a checkout with its runtime dependencies already installed, select the 1.3.0 release branch and reinstall the local source while retaining the conda dependency builds. Commit or otherwise preserve any local edits before switching branches:
 
 ```bash
+git fetch origin
+git switch release/asmsv-v1.3.0
 git pull --ff-only
 python -m pip install --force-reinstall --no-deps .
 asmSV --version
 git rev-parse HEAD
 ```
 
-Record the Git commit as well as the version when reproducing results; `asmSV --version` remains `AsmSV 1.3.0` across these branch updates.
+Record the Git commit as well as the version when reproducing results. This maintenance branch retains the 1.3.0 version number; use the Git commit and saved scoring configuration to distinguish updates. Scoring defaults changed for some upstream sources; see [compatibility notes](CHANGELOG.md) before comparing with earlier builds.
 
 
 ## Quick start
@@ -97,6 +100,8 @@ asmSV \
   -t 4 -o calls.vcf
 ```
 
+AsmSV uses one fixed AQ/DP scoring template for the supported assembly aligners. `--aligner`, BAM source modes and upstream scoring flags retain their provenance role; they do not change caller scores. An explicit `--preset-file` can override the common template for controlled experiments.
+
 If BAM hard clipping prevents recovery of complete contig sequences, add `--query-fasta1 hap1.fa --query-fasta2 hap2.fa` with indexed original assemblies. BAM and reference sequence names and lengths must agree. By default, the caller creates `hap1.asmsv.qname.bam` beside `hap1.bam` and the corresponding cache beside `hap2.bam`. Each run validates the cache and its source receipt before reuse; changing the output directory does not trigger another sort. Use `--work-dir` to choose a different cache directory, or `--sorted-bam1/2` to supply existing grouped BAMs.
 
 See the [user guide](docs/USAGE.md) for parameters, input checks, examples and troubleshooting.
@@ -109,11 +114,22 @@ See the [user guide](docs/USAGE.md) for parameters, input checks, examples and t
 | `calls.vcf.components.vcf` | Linked event components |
 | `calls.vcf.indels.vcf` | Reference-relative INS/DEL view |
 | `calls.vcf.events.jsonl` | Additional structural and provenance information |
+| `calls.vcf.regions.jsonl`, `.regions.bed` | Incomplete-region annotations, members, boundaries and connections |
 | `calls.vcf.genotypes.json` | Genotype summary |
 | `calls.vcf.run.json`, `.preset.json`, `.log` | Run status, configuration and log |
 | `calls.vcf.junctions.vcf` | Optional BND projection with `--junction-vcf` |
 
 Use `.indels.vcf` when comparing with an INS/DEL truth set. These files provide different views of the same calls; do not concatenate them and count every record independently. Field definitions and coordinate conventions are in the [output specification](docs/OUTPUT_FORMAT.md).
+
+Incomplete structures are retained as region annotations even when no complete event can be called. `REGION_ID` links existing VCF records to these annotations. Region membership and the optional CRR observation label do not add variants or establish one shared mutation. See [unresolved regions](docs/OUTPUT_FORMAT.md#unresolved-region-annotations).
+
+To browse composite SVs and export a VERIX breakpoint view after calling:
+
+```bash
+asmSV-cpx --vcf calls.vcf --scope csv --out-prefix calls.csv
+```
+
+Open `calls.csv.html` in a browser. The tool also writes `calls.csv.jsonl` and `calls.csv.verix.vcf`, preserving original SVTYPE and genotypes. Default scope includes CPX, inverted/dispersed DUP and local DELINS replacements, classified by the export-only ASMSV_CSV_CLASS field. Use `--scope cpx` for the previous CPX-only population. It does not rerun detection. See the [selection rules, format and VERIX usage](docs/OUTPUT_FORMAT.md#csv-browser-and-verix-export).
 
 ## Installation example
 

@@ -22,6 +22,7 @@ Issues = "https://github.com/Milia1368/AsmSV/issues"
 
 [project.scripts]
 asmSV = "asmsv_next.cli:main"
+asmSV-cpx = "asmsv_next.cpx_export:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

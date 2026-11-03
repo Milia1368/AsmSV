@@ -1,5 +1,6 @@
 """AsmSV: assembly-based haplotype-resolved structural variant calling."""
 import argparse
+from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime,timezone
@@ -24,7 +25,7 @@ from asmsv_next.constants import fixed_policy
 from asmsv_next.genotype import cluster_and_genotype,cluster_structural_calls
 from asmsv_next.input_io import inspect_headers
 from asmsv_next.pipeline import run_haplotype
-from asmsv_next.presets import canonical_aligner,mode_from_command,resolve_preset,source_costs
+from asmsv_next.presets import canonical_aligner,mode_from_command,resolve_preset
 from asmsv_next.runtime import arm_parent_death,raise_termination
 from asmsv_next.structures import BedMaskFilter
 from asmsv_next.vcf import write_vcf
@@ -36,8 +37,8 @@ def arguments(argv=None):
     p=argparse.ArgumentParser(prog='asmSV',description=__doc__)
     p.add_argument('--version',action='version',version='AsmSV '+__version__)
     p.add_argument('--aligner',required=True,type=canonical_aligner,choices=('minimap2','winnowmap','vacmap'))
-    p.add_argument('--aligner-preset',help='Upstream mode; inferred from unambiguous @PG or asm5/asm defaults')
-    p.add_argument('--preset-file',help='Optional schema-5 JSON override of the remaining AQ/DP parameters')
+    p.add_argument('--aligner-preset',help='Upstream mode for provenance/validation; inferred from @PG or asm5/asm defaults; does not select caller scores')
+    p.add_argument('--preset-file',help='Optional schema-5 JSON override of the fixed common AQ/DP template; upstream scoring flags are never inherited')
     p.add_argument('--bam1',required=True);p.add_argument('--bam2',required=True);p.add_argument('--ref',required=True)
     p.add_argument('--query-fasta1');p.add_argument('--query-fasta2')
     p.add_argument('--sorted-bam1',help='Existing BAM grouped by queryname; never modified')
@@ -203,11 +204,7 @@ def run(argv=None):
             if len(modes)>1:raise ValueError('Hap1/Hap2 upstream presets differ; use matching source modes for one run')
             mode=a.aligner_preset or (next(iter(modes)) if modes else ('asm' if a.aligner=='vacmap' else 'asm5'))
             if modes and modes!={mode}:raise ValueError('User upstream preset conflicts with BAM @PG')
-            overrides=[s.overrides for s in sources]
-            costs=[source_costs(a.aligner,mode,v) for v in overrides]
-            if costs[0]!=costs[1] and not a.preset_file:
-                raise ValueError('Hap1/Hap2 source scoring differs; provide an explicit common --preset-file')
-            preset=resolve_preset(a.aligner,mode,overrides[0],a.preset_file)
+            preset=resolve_preset(a.aligner,mode,preset_file=a.preset_file)
             SVConfig.CALLER_PRESET=preset;SVConfig.MIN_MAPQ=a.min_mapq
             SVConfig.MIN_SV_SIZE=a.min_sv;SVConfig.MAX_SV_SIZE=a.max_sv
             SVConfig.DETECTOR='structured';SVConfig.REFERENCE_FASTA=str(Path(a.ref).resolve())
@@ -222,7 +219,10 @@ def run(argv=None):
                 if key.isupper() and key!='CALLER_PRESET'}
             manifest.update(source_headers=[asdict(s) for s in sources],preset=preset.to_dict(),
                 derived_parameters=preset.derived_parameters(),fixed_policy=fixed_policy(),
-                preset_sha256=preset.fingerprint,mode_origin='user' if a.aligner_preset else 'header' if modes else 'declared-tool-default')
+                preset_sha256=preset.fingerprint,scoring_sha256=preset.scoring_fingerprint,
+                scoring_policy='explicit-json' if a.preset_file else 'fixed-common',
+                upstream_scoring_inherited=False,
+                mode_origin='user' if a.aligner_preset else 'header' if modes else 'declared-tool-default')
             save_json(str(out)+'.preset.json',preset.to_dict());save_json(record,manifest)
             logger.info('Resolved %s; score unit=%s; preset SHA256=%s',preset.id,preset.score_unit,preset.fingerprint)
             work=Path(a.work_dir).expanduser().resolve() if a.work_dir else None
@@ -261,12 +261,16 @@ def run(argv=None):
                 evidence=GenotypeEvidence(bundles,flank=preset.aq.min_anchor)
             genotype_summary={}
             record_maps=[]
+            region_links=defaultdict(list)
             def output_view(calls,path,view):
                 if evidence is not None:evidence.apply(calls,policy=a.genotyping)
                 genotype_summary[view]=summarize_genotypes(calls)
                 mapping=Path(SVConfig.STRUCTURE_DIR,view+'.records.jsonl')
                 with mapping.open('w',buffering=4*1024*1024) as records:
-                    def save_record(data):records.write(json.dumps(data,ensure_ascii=False,allow_nan=False)+'\n')
+                    def save_record(data):
+                        records.write(json.dumps(data,ensure_ascii=False,allow_nan=False)+'\n')
+                        for region_id in str(data['info'].get('REGION_ID','')).split(','):
+                            if region_id:region_links[region_id].append((view,data['record_id']))
                     write_vcf(calls,str(path),contigs,ref,view=view,record_sink=save_record)
                 record_maps.append(mapping)
             output_view(primary,out,'main')
@@ -281,7 +285,8 @@ def run(argv=None):
                 if c.info.get('PARENT_EVENT'):
                     c.info['PARENT_EVENT']=','.join(sorted({aliases.get(k,k) for k in c.info['PARENT_EVENT'].split(',')}))
             output_view(projected,indels,'indels')
-            with graph.open('w',buffering=4*1024*1024) as stream:
+            region_spool=Path(SVConfig.STRUCTURE_DIR,'regions.spool.jsonl')
+            with graph.open('w',buffering=4*1024*1024) as stream,region_spool.open('w',buffering=4*1024*1024) as region_stream:
                 junction_haps={'hap1':[],'hap2':[]}
                 stream.write(json.dumps(dict(record_kind='EVENT_ALIASES',aliases=aliases),ensure_ascii=False)+'\n')
                 for mapping in record_maps:
@@ -289,6 +294,8 @@ def run(argv=None):
                 for path in sorted(Path(SVConfig.STRUCTURE_DIR).glob('*.json')):
                     data=json.loads(path.read_text());data['record_kind']='CONTIG'
                     stream.write(json.dumps(data,ensure_ascii=False,allow_nan=False)+'\n')
+                    for region in data.get('regions',[]):
+                        region_stream.write(json.dumps(region,ensure_ascii=False,allow_nan=False)+'\n')
                     if a.junction_vcf:
                         from asmsv_next.output_views import junction_candidates
                         junction_haps[data['haplotype']].extend(junction_candidates(data,aliases))
@@ -298,6 +305,10 @@ def run(argv=None):
                 output_view(cluster_and_genotype(junction_haps['hap1'],junction_haps['hap2']),junction_path,'junctions')
                 with graph.open('a',buffering=4*1024*1024) as stream,record_maps[-1].open() as records:shutil.copyfileobj(records,stream)
                 manifest['views']['junctions']=str(junction_path)
+            from asmsv_next.region_output import write_regions
+            region_report=write_regions(SVConfig.STRUCTURE_DIR,record_maps,out,aliases,contigs,mask_applied=bool(a.mask),record_links=region_links,region_source=region_spool)
+            manifest['views'].update(regions=region_report['jsonl'],regions_bed=region_report['bed'])
+            manifest['region_summary']=region_report
             genotype_report=Path(str(out)+'.genotypes.json')
             save_json(genotype_report,dict(schema='asmsv-genotypes-v1',sample=a.sample,policy=a.genotyping,views=genotype_summary))
             manifest['genotype_summary']=genotype_summary

@@ -4,7 +4,7 @@
 
 AsmSV requires `--bam1`, `--bam2`, `--ref` and `--aligner`. Both BAMs must describe assemblies aligned to the same reference. Reference identifiers and lengths must match the FASTA dictionary.
 
-Supported source declarations are `minimap2`, `winnowmap` and `vacmap`. Input handling is tested for all three; whole-genome validation currently uses minimap2 asm5. Do not assume identical performance across aligners or presets.
+Supported source declarations are `minimap2`, `winnowmap` and `vacmap` (`winnowmap2` is an alias). HG002–CHM13 reference INS/DEL evaluation covers minimap2 asm5/asm20, Winnowmap asm20 and VACmap asm inputs. Alignment evidence and accuracy still vary across these inputs.
 
 Retain primary and supplementary alignments with real CIGARs. EQX, MD or cs provide alignment-difference information; valid NM tags can also be used when supported. Text `CG:Z` replacement CIGARs are unsupported. For hard-clipped inputs without a complete BAM sequence, supply indexed original assemblies through `--query-fasta1/2`.
 
@@ -17,7 +17,11 @@ asmSV --aligner minimap2 \
   -t 4 -o calls.vcf
 ```
 
-The source mode is inferred from consistent BAM program headers. Use `--aligner-preset` when an explicit declaration is needed. Conflicting source declarations are reported.
+The source mode is inferred from consistent BAM program headers. Use `--aligner-preset` when an explicit declaration is needed. Conflicting source declarations are reported. Source modes describe the BAM's origin; they do not select numerical caller parameters.
+
+All supported sources use the fixed `common-assembly-hq-v5` template: AQ mismatch 19, gap open (39,81), gap extend (3,1), structural threshold/scale 50/10; DP query gap 0.25, excess overlap 0.5, chromosome change 500 and inversion 200. AQ still scores each alignment's actual differences and applies MAPQ policy. Native AS and upstream `-A/-B/-O/-E` flags do not supply caller coefficients. Different scoring flags between the two BAMs are allowed and recorded.
+
+For an explicit experiment, pass `--preset-file presets/common-assembly-hq-v5.json` or a custom schema-5 JSON. Partial JSON overrides inherit the fixed common template. Source-specific defaults from earlier builds must be supplied explicitly to reproduce their numerical scoring; selecting `--aligner-preset asm20` alone now only declares provenance. The supplied example is the same template used without a preset file. High-divergence or error-rich assemblies require separate calibration; the HG002 evaluation does not establish an optimum for those inputs.
 
 ## Common options
 
@@ -26,6 +30,8 @@ The source mode is inferred from consistent BAM program headers. Use `--aligner-
 | `--bam1`, `--bam2` | Required | Haplotype assembly alignments |
 | `--ref` | Required | Indexed reference FASTA |
 | `--aligner` | Required | Source aligner |
+| `--aligner-preset` | BAM header or declared-tool mode | Source mode for provenance and consistency checks |
+| `--preset-file` | Fixed common template | Explicit schema-5 AQ/DP override |
 | `--sample` | SAMPLE | Output VCF sample name |
 | `-o`, `--output` | results.vcf | Main output path |
 | `-t`, `--threads` | 4 | Workers per haplotype |
@@ -37,7 +43,7 @@ The source mode is inferred from consistent BAM program headers. Use `--aligner-
 | `--scratch-dir` | System temporary directory | BAM sort spill files and temporary structural evidence |
 | `--genotyping` | assembly | assembly, evidence or presence |
 | `--vcf-info` | minimal | minimal or full annotation profile |
-| `--junction-vcf` | Disabled | Write a separate BND projection |
+| `--junction-vcf` | Disabled | Write a separate BND projection, including retained connections from incomplete regions |
 | `--mask` | None | Exclude candidates overlapping a reference BED |
 | `--max-sv` | 1,500,000 | Duplication-gain OVERSIZE setting; -1 disables it; not a universal length filter |
 

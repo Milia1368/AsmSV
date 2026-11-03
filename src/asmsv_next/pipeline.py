@@ -66,11 +66,13 @@ def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
         tied=result.tied,rejections=dict(reasons),query_sequence='FASTA' if sequence.fasta_path else 'BAM')
     stats['sequence_backend']='SHARED' if sequence.shared_name else 'FASTA' if sequence.fasta_path else 'COPY'
     stats['stage_seconds']=dict(aq=t1-t0,global_dp=t2-t1,backbone_dp=t3-t2,
-        split_detection=t4-t3,cigar_detection=cigar_seconds)
+        split_detection=t4-t3-structural.region_seconds,cigar_detection=cigar_seconds,
+        region_annotation=structural.region_seconds)
     if structural:
         stats.update(cigar_scans=structural.cigar_scans,structure_contexts=len(structural.contexts),
             resolved_cpx=sum(c.type=='CPX' for c in calls),
-            unresolved_contexts=sum(c['resolution']!='RESOLVED' for c in structural.contexts))
+            unresolved_contexts=sum(c['resolution']!='RESOLVED' for c in structural.contexts),
+            unresolved_regions=len(structural.regions))
         if SVConfig.STRUCTURE_DIR:
             key=hashlib.sha256((haplotype+'\0'+name).encode()).hexdigest()[:20]
             from asmsv_next.genotype_evidence import contig_evidence
@@ -78,6 +80,7 @@ def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
                 blocks=[dict(index=i,alignment_id=b.score_root.raw.alignment_id,query=[b.qs,b.qe],
                     reference=[b.ref_name,b.ref_start,b.ref_end,b.strand]) for i,b in enumerate(chain)],
                 backbone_indices=sorted(indices),contexts=structural.contexts,events=structural.events,atoms=structural.atoms,
+                region_schema='asmsv-regions-v1',regions=structural.regions,
                 genotyping=contig_evidence(chain,indices,name))
             if SVConfig.GENOTYPING!='presence':stats['_genotyping']=data['genotyping']
             target=Path(SVConfig.STRUCTURE_DIR,f'{haplotype}_{key}.json')
