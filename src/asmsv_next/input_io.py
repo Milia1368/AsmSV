@@ -124,7 +124,7 @@ def bam_groups(path,haplotype,query_fasta=None,sequence_transform=None):
             for r in mapped:
                 pg=r.get_tag('PG') if r.has_tag('PG') else None
                 if pg not in cache:cache[pg]=inspected_source(header,p.aligner,p.mode,pg)
-                tags={k:r.get_tag(k) for k in ('AS','NM','MD','cs','PG') if r.has_tag(k)}
+                tags={k:r.get_tag(k) for k in ('AS','NM','MD','cs','nn','PG') if r.has_tag(k)}
                 records.append(dict(q_name=name,ref_name=r.reference_name,ref_start=r.reference_start,
                     ref_end=r.reference_end,cigar=r.cigartuples,mapq=r.mapping_quality,
                     is_reverse=r.is_reverse,flag=r.flag,query_length=length,raw_as=tags.get('AS'),

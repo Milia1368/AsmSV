@@ -1,0 +1,167 @@
+{
+  "schema": "asmsv-csv-examples-v1",
+  "software": "AsmSV",
+  "version": "1.3.0",
+  "reference": "CHM13v2.0",
+  "sample": "HG002",
+  "source_bundle": "unresolved_regions_20261103",
+  "original_vcf_header_date": "20261102",
+  "source_preset": {
+    "id": "minimap2-asm5-paired-v5",
+    "aligner": "minimap2",
+    "mode": "asm5",
+    "aq": {
+      "mismatch": 19.0,
+      "gap_open": [
+        39.0,
+        81.0
+      ],
+      "gap_extend": [
+        3.0,
+        1.0
+      ],
+      "structural_gap_min": 50,
+      "structural_scale": 10.0
+    },
+    "dp": {
+      "query_gap": 0.25,
+      "excess_overlap_rate": 0.5,
+      "cross_chromosome": 500.0,
+      "inversion": 200.0
+    },
+    "score_unit": "match_equivalent_bp",
+    "schema_version": 5
+  },
+  "source_implementation_sha256": {
+    "__init__.py": "179996d3ba52c86aea0cd636121afe5290f3a41b4df85b185344066567fa3c91",
+    "__main__.py": "8abed90e703d967a7f2a8a6c7da20426499c2881e2e22a12fc959d7599e5cf9f",
+    "alignment.py": "bf068eb89206185f68b1787098f21747836a85316e0f0997a7ca3f7a62c1bce5",
+    "alignment_tags.py": "dbb1781e9cfa26c402452648507a767895f0e7bc73b7ee6668f29117db500f84",
+    "aq.py": "a7e829f0a770a1c1bf22409085df6ab3602511644e314b392dc1dd7bce8718aa",
+    "cli.py": "54405a7eaad93789669930ac5ab88b5baced57a8fdabb8c5352987203b0373fb",
+    "config.py": "f58caa07dab399cb1e3e3f7559068e0b8f0e434241751de4632427cdfd34e438",
+    "constants.py": "eed281e51f178d6f69cf410722944e048bdcfba53ef5252f76f3cbb229e88732",
+    "cpx_diagram.py": "187a4c37347910f88dfc80e62c7b7e2c9900cc7ba6ab7a711cb66205476f9a2b",
+    "cpx_export.py": "360178c9cb875502724ecbd127adc0ddda2b73c54e3255e2538c153bb2e075cb",
+    "csv_scope.py": "35d87be18c4c84f3bcab43c60c5791ee8923c0731e1e947c7eafbeca26776297",
+    "dp.py": "3aa5fb9ae2e4d051390a211344e9c457ce10eb8fed82302eea2d20c9e396dbb3",
+    "genotype.py": "252ef3e9d2930c7800522be0aceea9fd1aba4c9503d298fc6493d8a84201e10b",
+    "genotype_evidence.py": "ce4a264ef58cd84025eda610698d2a9333da1e5df9f600afc4bd471829ee4dae",
+    "input_io.py": "d41cd5bb5e69944f1aa577c14ac6931dcb96506441c67da4ada014745f305793",
+    "nomenclature.py": "aba6176b15e4061536f2cbe794d066a0a5f68c0a0dbeb99f3e87b72ca14aec6b",
+    "output_views.py": "2a0f8a24eaf3ab99bfece7218a94a698784380c0349e8313bb71a900963cc5bf",
+    "pipeline.py": "26ddc85710cb989dc62edb5d664038d6eda0c09b8f62703915d04fc65d03da37",
+    "presets.py": "352d64eb58a7ac37101df0bf34613786a934d832eaef1f568bdeba7110da7f00",
+    "region_output.py": "21607b147814d9efbfaeb0dcd566725c0be79cec671087cbfd4eeb1a5f59b57f",
+    "runtime.py": "b53c787b17a8b505cfa83a2c0423c5d9e472fe4cec3cb3755a963b1bac845a61",
+    "score_support.py": "3dfbe22ed0c8c67df2554697ff26079978510607e8da14bd63c465d771133c2e",
+    "sequence_check.py": "055cb40bc6267cc119c8ee595c69698850a2226bb550fe3df6002f97b999d37c",
+    "sequence_transport.py": "c302046a9473157ad8a7595da0097dcd10007644a2c69662e2999677f3ffb34d",
+    "ssv.py": "ed34af4591cfebd00cbd67a348ba208ce021af0dd8d772f04bbf466137a9999c",
+    "structural_detection.py": "4727c03a7a70844c11aa827938e21c19aed280f4c08f2eb4d55dfc0be54e3635",
+    "structures.py": "de981e648e63d7a06e0d90773cfb904a3c4b0a6d4e2382e6732aa39117297793",
+    "unresolved_regions.py": "e3ee818b72f81555e9c9f49e68df5c12406624a62794e65091e635fdb39ebafa",
+    "vcf.py": "d8593d73c042c9d44c33c657bee51db3fe25e68faaeef9539d97f6cff3b88f1d",
+    "vcf_annotations.py": "d5f7d39e03184240b96afebb0bfd68345d480ae7fa4257ae494ae0c2b4c7eb41"
+  },
+  "evidence": "Frozen caller output, not independently validated truth; caller not rerun for this subset.",
+  "selection": "Five named report units plus one named unresolved context; no new detection or grouping.",
+  "transformations": [
+    "VCF data lines copied unchanged",
+    "Header subset note added; reference declarations preserved",
+    "JSONL retains only selected record indices, events, contexts, atoms, regions and referenced blocks; original block indices retained",
+    "Full-contig genotyping traversal index omitted; excerpt cannot rerun detection"
+  ],
+  "case_ids": {
+    "E1": "EVENT.fec02c216e5187917e8344ee",
+    "E2": "EVENT.28d094bb75442489a57a3cda",
+    "E3": "EVENT.47c90f8bd1c8324ff795918f",
+    "E4": "EVENT.ee56f9532e91fd95587bd829",
+    "E5": "SV.DELINS.000004",
+    "U1": "REGION.440fcc21c1282d2a732619c3"
+  },
+  "source_sha256": {
+    "results.vcf": "5bbbe6ce2037d5a7f3318c3e76b6adaa936dd909e7963d637dfc17428513380a",
+    "results.vcf.components.vcf": "2f678660045007ffd5316be45a91b8ec3737df071dc9cd994d061fd446a091b5",
+    "results.vcf.indels.vcf": "9bf1b8c27d2c8addf85ae48aa1a157275d42d06f045f17e43779563557ba4d28",
+    "results.vcf.junctions.vcf": "6d389e64d46f717d09c1aeac1a5c0ae708a6045a315a60da2443d83bfb48deac",
+    "results.vcf.events.jsonl": "2e565f9cf834bd0ace097874e3b63402a145a7031f5e667c08687d97cc23d8d8",
+    "results.vcf.regions.jsonl": "104d09e4d4e8f5eefe6184a726020ec1d04990a38362e957b65207e0f2159f1d",
+    "results.vcf.regions.bed": "4883a136543ccef704a89396699ab99e7833d01319fd64818979bcc9b1198ede",
+    "results.vcf.run.json": "01227b83452a375be54a8418d0d569bd8f3f6f306c56c6aa92106f3c4f114f62"
+  },
+  "row_sha256": {
+    "main:SV.DELINS.000004": "9ac908e642a2e9f67819f70dfa6ff90704847be10623f99d0d232c5752060ecc",
+    "main:EVENT.fec02c216e5187917e8344ee": "6a4099617c70247e725290bd229e2a6d98eda3010e4902d40a51e4712f8dc5ed",
+    "main:EVENT.ee56f9532e91fd95587bd829": "ed777bb8d8eca13bb30145ee3b743902c2c623adf550f88ad40fec2089ede1bf",
+    "main:EVENT.47c90f8bd1c8324ff795918f": "ecea2bbfa34dc007ae9cd3bb52865510fa26f73a614a9ac5b9ea798970f37f50",
+    "main:EVENT.28d094bb75442489a57a3cda": "70d81473cc24f001e3b6c33b5a25b1fd06b46bf98bb89c94f056a7d68235615f",
+    "components:SV.INS.000109": "7994376927e51227e0940e53628e3e15c16ea7c5961ca93844403b2952c289a2",
+    "components:SV.INS.000415": "64a8cc09ca7e32d9b834dd0c9a6b5089ca39be63c2e7528abb92d641e981a5ba",
+    "components:SV.DEL.000001": "7c45f6acf66a4b3df0e8b9b693146011dbca26891f7c23182f2b5f5ee395cf04",
+    "components:SV.INS.000485": "f6e7dafd1b64a8936346445a89077e0f847fb98c798f5fbb277a5685573d18bd",
+    "components:SV.DEL.000002": "f5bd53093bff6c4101d75f6bdb73330b608865d92997244f176eb72cf0886d1b",
+    "components:SV.DEL.000003": "d13993e76e10be5ec53d93d7493b2de5411081c8bbb54bbbff15110e15b32729",
+    "indels:PROJ.2a4807471517f5f6be301480": "b713adf40e7557828fb69706d10ae9047ef3f63c4a457d1c1f3ac234bd5aa210",
+    "indels:SV.INS.004403": "293b27792348970fb9bdac4ed6ae54fef8189ac9833b78a8f0beb0388d35ec87",
+    "indels:PROJ.bb1154b3c1b585e0e7ec007c": "1ce23e1dd25d07399c8531c1500bbe058f6549cc07efe10c09c04cef4a59256e",
+    "indels:SV.DEL.007214": "f5e321f6d5c75d0f884f75218796f85dba0f777b2e52c920f69f139ef5ac757c",
+    "indels:SV.DEL.007216": "a3dc4e51961df06e57a67d06d08d7a7737776a6f969e25038cf6e12488296537",
+    "junctions:ADJ.efd5cd3d1f5d7e19d32b3a14.a": "c0d461e5e2ccfa38a71453f31cd877e1700900044677adf284976a72557e3cc2",
+    "junctions:ADJ.efd5cd3d1f5d7e19d32b3a14.b": "5b0beb3af5211fa1383974ee52e20619eb57330e0eb1ca03c6922442d4b6341d",
+    "junctions:ADJ.69be4c921d70cbc8c56e7b0c.a": "1989a0f36174873b465cae743c353fd859f53cd6149f71807ccb30530761ff9f",
+    "junctions:ADJ.36c842d5c5287490b9f21e61.a": "2bdeb40f0f5ae4b8bc08d044a4f7cb574fbeb83a826c8126f44b4da624194273",
+    "junctions:ADJ.36c842d5c5287490b9f21e61.b": "f6f7f5aa7142e8cbe5097441c6ca6ab777a265c1092da85bff131f222d4997f7",
+    "junctions:ADJ.69be4c921d70cbc8c56e7b0c.b": "1fb754a52384bbc28772e6080eb350e1051c04de7a24384fd2362caf56415446",
+    "junctions:ADJ.310970a4edd950c82c2e8e81.a": "df5298603f3f0cfa7ca1560434ffc6c927736a9b2189fb77e655d153e6c53ab7",
+    "junctions:ADJ.0f1ec6cba78f2439d0090081.a": "d6294098b54048320417b8a5c60fa96e407d6a83df1c48237d94e2339fdc662b",
+    "junctions:ADJ.0f1ec6cba78f2439d0090081.b": "a1e3c4dabeb2c29f5fbc7aedeb9f4ff3c966df6d1659ee5699d38abc52ef6ba8",
+    "junctions:ADJ.310970a4edd950c82c2e8e81.b": "ec434fde822fd5735122927d55166f6e0b3753391470b67e1d029f182117aa0e",
+    "junctions:ADJ.27065b54096bd85cf5adb94a.a": "9b955a4f22ecce281d83ff199cd3ddbf25f160243387f62ca5fd453d379a2005",
+    "junctions:ADJ.ec1049579cb97531eaf91632.a": "4915f4701f7f662a56b95eff06d649a4fa7b4c76f887a16feb3f7aea7fc1c4a8",
+    "junctions:ADJ.27065b54096bd85cf5adb94a.b": "32a2b1f6c7f393e0d9cca5205623f0dde43e7aab8b54b91a7841d613ac2a76b4",
+    "junctions:ADJ.ec1049579cb97531eaf91632.b": "1dfca4f9ebad7811e3ee3774da371d1247b54fba2041eba4c6b3b37addf21023",
+    "junctions:ADJ.271bbcbb4298420ec8e30ae6.a": "c6abdd580b59b4b350dc82b0904df3cb28721427d342f41e60a9858290ecdf60",
+    "junctions:ADJ.271bbcbb4298420ec8e30ae6.b": "bca21a23d31c10f09b921d0e97c9e61bf07005a5c397710abb6e5e67d6ccd4ec",
+    "junctions:ADJ.4654849d3ab6cf8affbc70a2.a": "aac7bdc700c8ed084e3dc531b068350cda6d23ebeea35cac11bfd3dab964dceb",
+    "junctions:ADJ.624ea8286e520ab8f70fb5c1.a": "a757048f7b528463f817a480a5ab3a60d91728350bc4673327b372b540ade740",
+    "junctions:ADJ.4654849d3ab6cf8affbc70a2.b": "dca86aadda967a488a71acc89653f838011449d6f03a01f4a00c9326d569310d",
+    "junctions:ADJ.624ea8286e520ab8f70fb5c1.b": "c8bddd0d351aced3947efbf633a5d84de137133c2761d05188a380b4fd68531d"
+  },
+  "rows": {
+    "main": 5,
+    "components": 6,
+    "indels": 5,
+    "junctions": 20
+  },
+  "files": {
+    "calls.vcf": {
+      "bytes": 7965,
+      "sha256": "ba7ff6bd1eb3131d7bfcd9866dfcfaab90bf631ff45d3dc3d24731ca2cad7491"
+    },
+    "calls.vcf.components.vcf": {
+      "bytes": 19445,
+      "sha256": "4d3d3938516eb56b03a62a0092dd2dff69150770466b859ff2cb192085360ce9"
+    },
+    "calls.vcf.events.jsonl": {
+      "bytes": 62419,
+      "sha256": "26ee18b5106759da32a2928d5217921fe446a02d4bd8e059ee82f6083c715ee9"
+    },
+    "calls.vcf.indels.vcf": {
+      "bytes": 12586,
+      "sha256": "aca839c042467c4ea65995d58edb4e250f91fb10134fa0e932221f9746f0610f"
+    },
+    "calls.vcf.junctions.vcf": {
+      "bytes": 10801,
+      "sha256": "0e1aacaecac6f5cb2e66aa31f5a608a2e02445ff91c3c4e28715e25fe99e7d46"
+    },
+    "calls.vcf.regions.bed": {
+      "bytes": 572,
+      "sha256": "2e85d9e251d5142ec0c73051e8773cdbfa331a4e3cb420d66b21fa4703e283ec"
+    },
+    "calls.vcf.regions.jsonl": {
+      "bytes": 6179,
+      "sha256": "32b601c5c5a59df0d06327ac38d95d5da2dc6b7066b2c828e1b9d8c3302abc1c"
+    }
+  }
+}

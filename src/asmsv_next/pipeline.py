@@ -30,6 +30,7 @@ def describe(block):
         quality_flags=block.quality_flags,reward_rescued=block.reward_rescued,
         alignment_id=block.score_root.raw.alignment_id,
         source_query=[block.score_root.raw.qs,block.score_root.raw.qe],
+        difference_source=block.score_root.difference_source,
         source=asdict(block.score_root.raw.source))
 
 
@@ -42,8 +43,11 @@ def call_contig(name,records,sequence,length,haplotype,trace_dir=None):
 
 def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
     t0=time.perf_counter()
-    blocks=[AlignedSegment(r) for r in records];valid=[b for b in blocks if b.is_valid]
-    input_count,eligible_count=len(blocks),len(valid)
+    reference=fasta_handle(SVConfig.REFERENCE_FASTA) if SVConfig.REFERENCE_FASTA else None
+    originals=blocks=[AlignedSegment(record) for record in records]
+    difference_sources=Counter(b.score_root.difference_source for b in blocks)
+    valid=[b for b in blocks if b.is_valid]
+    input_count,eligible_count=len(records),len(valid)
     reasons=Counter(reason for b in blocks for reason in b.rejection_reasons)
     t1=time.perf_counter()
     result=solve_path(valid,length);chain=list(result.blocks)
@@ -53,10 +57,9 @@ def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
     if not trace_dir:
         # AQ/DP have consumed these nodes. The selected chain owns the roots
         # needed downstream; unselected roots need not live through SV parsing.
-        del blocks,valid
+        del blocks,valid,originals
     structural=None
     from asmsv_next.structural_detection import detect_structures
-    reference=fasta_handle(SVConfig.REFERENCE_FASTA) if SVConfig.REFERENCE_FASTA else None
     structural=detect_structures(chain,strand,indices,name,sequence,reference,haplotype)
     calls=structural.calls+structural.projections;cigar_seconds=structural.cigar_seconds
     t4=time.perf_counter()-cigar_seconds
@@ -64,6 +67,7 @@ def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
         chain_blocks=len(chain),backbone_blocks=len(indices),branch_blocks=len(chain)-len(indices),
         candidates=len(calls),dp_score=result.score,evaluated_predecessors=result.evaluated_predecessors,
         tied=result.tied,rejections=dict(reasons),query_sequence='FASTA' if sequence.fasta_path else 'BAM')
+    stats['difference_sources']=dict(difference_sources)
     stats['sequence_backend']='SHARED' if sequence.shared_name else 'FASTA' if sequence.fasta_path else 'COPY'
     stats['stage_seconds']=dict(aq=t1-t0,global_dp=t2-t1,backbone_dp=t3-t2,
         split_detection=t4-t3-structural.region_seconds,cigar_detection=cigar_seconds,
@@ -87,7 +91,7 @@ def _call_contig_body(name,records,sequence,length,haplotype,trace_dir=None):
             tmp=target.with_suffix('.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False,allow_nan=False)+'\n');os.replace(tmp,target)
     if trace_dir:
         key=hashlib.sha256((haplotype+'\0'+name).encode()).hexdigest()[:20]
-        data=dict(stats={k:v for k,v in stats.items() if k!='_genotyping'},preset=SVConfig.CALLER_PRESET.to_dict(),blocks=[describe(b) for b in blocks],
+        data=dict(stats={k:v for k,v in stats.items() if k!='_genotyping'},preset=SVConfig.CALLER_PRESET.to_dict(),raw_blocks=[describe(b) for b in originals],blocks=[describe(b) for b in blocks],
             chain=[describe(b) for b in chain],backbone_indices=sorted(indices),
             transitions=[dict(left=a.score_root.raw.alignment_id,right=b.score_root.raw.alignment_id,
                 terms=edge_terms(a,b)) for a,b in zip(chain,chain[1:])],

@@ -47,7 +47,12 @@ class PackedIndexTests(unittest.TestCase):
                 self.assertEqual([r._asdict() for r in new.index.runs],[asdict(r) for r in old.index.runs])
                 for _ in range(30):
                     start,end=sorted(rng.sample(range(new.raw.qs,new.raw.qe+1),2))
-                    self.assertEqual(exact(asdict(new.index.score(start,end))),exact(asdict(old.index.score(start,end))))
+                    current=new.index.score(start,end);previous=old.index.score(start,end)
+                    x,y=asdict(current),asdict(previous)
+                    # AQ-v2 changes the density denominator, not DP rewards.
+                    x.pop('evaluation_length');y.pop('evaluation_length')
+                    self.assertEqual(exact(x),exact(y))
+                    self.assertEqual(exact(current.node_reward),exact(previous.node_reward))
                     self.assertEqual(new.mapped_bounds(start,end),old.mapped_bounds(start,end))
                     if new.mapped_bounds(start,end) is not None:
                         self.assertEqual(new.cigar_view(start,end),old.cigar_view(start,end))

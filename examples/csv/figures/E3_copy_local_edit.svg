@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="864pt" height="410.4pt" viewBox="0 0 864 410.4" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-02T12:24:05.623886</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.8, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 410.4
+L 864 410.4
+L 864 0
+L 0 0
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 152.928 107.9352
+L 226.8 107.9352
+L 243.216 90.4932
+L 226.8 73.0512
+L 152.928 73.0512
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #687484"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 276.048 107.9352
+L 374.544 107.9352
+L 390.96 90.4932
+L 374.544 73.0512
+L 276.048 73.0512
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #336ca3"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 399.168 107.9352
+L 481.248 107.9352
+L 497.664 90.4932
+L 481.248 73.0512
+L 399.168 73.0512
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #af3847"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 505.872 107.9352
+L 612.576 107.9352
+L 628.992 90.4932
+L 612.576 73.0512
+L 505.872 73.0512
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #336ca3"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 661.824 107.9352
+L 768.528 107.9352
+L 784.944 90.4932
+L 768.528 73.0512
+L 661.824 73.0512
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #687484"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 152.928 237.006
+L 210.54816 237.006
+L 226.8 219.564
+L 210.54816 202.122
+L 152.928 202.122
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #687484"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 251.424 237.006
+L 399.168 237.006
+L 415.584 219.564
+L 399.168 202.122
+L 251.424 202.122
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #336ca3"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 440.208 237.006
+L 571.536 237.006
+L 587.952 219.564
+L 571.536 202.122
+L 440.208 202.122
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #b86619"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 612.576 237.006
+L 735.696 237.006
+L 752.112 219.564
+L 735.696 202.122
+L 612.576 202.122
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #187a73"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 776.736 237.006
+L 821.55168 237.006
+L 834.192 219.564
+L 821.55168 202.122
+L 776.736 202.122
+z
+" clip-path="url(#pcd6f5f93dd)" style="fill: #687484"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 243.216 90.4932
+L 276.048 90.4932
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_2">
+    <path d="M 628.992 90.4932
+L 661.824 90.4932
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_3">
+    <path d="M 276.048 118.4004
+L 276.048 125.3772
+L 628.992 125.3772
+L 628.992 118.4004
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.1; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_4">
+    <path d="M 226.8 219.564
+L 251.424 219.564
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_5">
+    <path d="M 415.584 219.564
+L 440.208 219.564
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_6">
+    <path d="M 587.952 219.564
+L 612.576 219.564
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_7">
+    <path d="M 752.112 219.564
+L 776.736 219.564
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_8">
+    <path d="M 440.208 254.448
+L 440.208 261.4248
+L 752.112 261.4248
+L 752.112 254.448
+" clip-path="url(#pcd6f5f93dd)" style="fill: none; stroke: #253249; stroke-width: 1.1; stroke-linecap: square"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="38.016" y="79.574912" transform="rotate(-0 38.016 79.574912)">Reference</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="198.072" y="93.528512" transform="rotate(-0 198.072 93.528512)">L</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="333.504" y="93.528512" transform="rotate(-0 333.504 93.528512)">A</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="448.416" y="93.528512" transform="rotate(-0 448.416 93.528512)">D 373</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="567.432" y="93.528512" transform="rotate(-0 567.432 93.528512)">B</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="723.384" y="93.528512" transform="rotate(-0 723.384 93.528512)">R</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #253249" x="452.52" y="147.689081" transform="rotate(-0 452.52 147.689081)">Reference source S = A + D + B (5159 bp span)</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="38.016" y="208.645713" transform="rotate(-0 38.016 208.645713)">Haplotype</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="189.864" y="222.599312" transform="rotate(-0 189.864 222.599312)">L</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="333.504" y="222.599312" transform="rotate(-0 333.504 222.599312)">S retained</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="514.08" y="222.599312" transform="rotate(-0 514.08 222.599312)">X 6116</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="682.344" y="222.599312" transform="rotate(-0 682.344 222.599312)">A + B</text>
+   </g>
+   <g id="text_13">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #ffffff" x="805.464" y="222.599312" transform="rotate(-0 805.464 222.599312)">R</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #253249" x="596.16" y="283.736681" transform="rotate(-0 596.16 283.736681)">Measured added query sequence: 6116 + 4782 = 10898 bp</text>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="38.016" y="330.324713" transform="rotate(-0 38.016 330.324713)">Component DEL 373: EDIT_CONTEXT=ADDED_DUPLICATE. The retained occurrence still covers the source.</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="38.016" y="365.347775" transform="rotate(-0 38.016 365.347775)">Indels view: one INS 10898; it does not include this copy-local DEL as a reference-locus deletion.</text>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="38.016" y="396.467438" transform="rotate(-0 38.016 396.467438)">Schematic, not to scale. Component lengths do not list every small base-level difference; see the 4 bp note.</text>
+   </g>
+  </g>
+  <g id="text_18">
+   <text style="font-weight: 700; font-size: 15px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #253249" x="30.24" y="19.605656" transform="rotate(-0 30.24 19.605656)">E3: deletion in the ADDED copy, not loss of the source locus</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pcd6f5f93dd">
+   <rect x="21.6" y="45.144" width="820.8" height="348.84"/>
+  </clipPath>
+ </defs>
+</svg>

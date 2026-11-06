@@ -1,7 +1,7 @@
 """VCF presentation policy. Never changes candidate detection or genotyping."""
 import hashlib,json
 
-BASE={'SVTYPE','END','SVLEN','SEQ','MATEID','RNAMES','RESOLUTION','REGION_ID'}
+BASE={'SVTYPE','END','SVLEN','SEQ','SEQID','SEQLEN','SEQSHA256','SEQFILE','MATEID','RNAMES','RESOLUTION','REGION_ID','RELOCATION_ID'}
 BIOLOGY=BASE|{'DUP_TYPE','DUP_ORIENT','CPX_TYPE','CPX_COMPONENTS','CPX_INTERVALS',
     'INS_ORIGIN','SOURCE_STATE','SOURCE_STATES','SOURCE_CHR','SOURCE_START','SOURCE_END','SOURCE_ORIENT',
     'TARGET_CHR','TARGET_POS','INS_LEN','DEL_LEN','EDIT_INS_LEN','EDIT_DEL_LEN',
@@ -27,7 +27,7 @@ def select_info(info,record,view='main',level='minimal'):
     if level=='full':return result
     if level!='minimal':raise ValueError('Unknown VCF annotation profile: '+level)
     role=info.get('ROLE');parent=info.get('PARENT_EVENT')
-    if view=='indels':allowed=BASE|{'EVENT','PARENT_EVENT'}
+    if view in ('indels','target_indels'):allowed=BASE|{'EVENT','PARENT_EVENT'}
     elif view=='junctions':allowed=BASE|{'EVENT','PARENT_EVENT'}
     elif view=='components':allowed=BASE|{'EVENT','PARENT_EVENT','EDIT_CONTEXT','INS_LEN','DEL_LEN',
         'INS_ORIGIN','SOURCE_STATE','SOURCE_CHR','SOURCE_START','SOURCE_END','SOURCE_ORIENT'}

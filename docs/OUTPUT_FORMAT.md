@@ -2,6 +2,8 @@
 
 AsmSV writes VCF 4.2 with declared caller-specific INFO fields. The main file, component file, reference INS/DEL file and optional junction file provide different views of the same evidence.
 
+Worked examples and a runnable real-output subset: [English](CSV_EXAMPLES_EN.md) / [中文](CSV_EXAMPLES_ZH.md).
+
 ## Variant types
 
 | Type | Meaning |
@@ -20,6 +22,8 @@ Direct tandem copies use `<DUP:TANDEM>`. Other copy annotations may include `DUP
 
 | File suffix | Contents |
 | --- | --- |
+| .sequences.fa and optional .fai | Content-addressed full insertion payloads and FASTA index |
+| .target_indels.vcf | Optional exact tandem-target indel representation |
 | Main `.vcf` | Canonical events and independent calls |
 | `.components.vcf` | Components associated with canonical events |
 | `.indels.vcf` | Reference-relative insertion/deletion projection |
@@ -35,6 +39,14 @@ Direct tandem copies use `<DUP:TANDEM>`. Other copy annotations may include `DUP
 The run manifest separates `preset_sha256` (configuration including source identity) from `scoring_sha256` (numerical AQ/DP evaluation). `scoring_policy` is `fixed-common` for defaults or `explicit-json` for an override. Source modes and literal scoring flags remain in the provenance fields; `upstream_scoring_inherited=false` records that they did not supply caller coefficients.
 
 For an output name `calls.vcf`, the component filename is `calls.vcf.components.vcf`. Do not add counts across the VCF views. A deletion within an added copy is not an original-locus deletion; the reference `.indels.vcf` view handles that distinction for INS/DEL comparisons.
+
+## Insertion payloads and equivalent views
+
+All available INS sequence is retained in literal ALT, including insertions≥10 kb. The companion .sequences.fa stores deduplicated payloads under ASMSVSEQ.<SHA256>; .fai is written when nonempty. INFO SEQID, SEQLEN, SEQSHA256 and SEQFILE identify the payload and its length/hash. Assembly N/IUPAC characters remain literal uncertainty, not certified ACGT sequence. A missing payload remains symbolic.
+
+Default .indels.vcf uses bounded exact insertion normalization. With --tandem-target-indels, .target_indels.vcf additionally places tandem INS at its parent's declared target after checking complete local allele equivalence. Long tandem alleles can have equivalent ports separated by their full copy length; a fixed benchmark distance can score these differently. Specify the view and representation policy and evaluate equivalent truth/query representations. Do not add counts across these files. Original atom coordinates, hashes and normalization diagnostics remain in .events.jsonl.
+
+RELOCATION_ID links independently observed same-haplotype source DEL and target INS through exact DNA, with source/target boundary shifts individually verified. SOURCE_STATE=REMOVED and the RELOCATION JSONL record document source loss and target gain; uniqueness is limited to HAPLOTYPE_DELETION_CANDIDATES. This is not an extra canonical TRA/CPX count or a unique historical mechanism. Optional junctions include the two source/target joins while the source DEL supplies closure; a flattened target INS edge is suppressed when the source joins represent it. Cross-haplotype source metadata requires consensus. A main INS/DEL-only view cannot substitute for the paired adjacency view when assessing relocation topology.
 
 ## CSV browser and VERIX export
 
@@ -149,7 +161,7 @@ Default `--genotyping assembly` retains dosage estimates with evidence filters. 
 
 ## Filters and partial structures
 
-PASS concerns the variant record; FORMAT/FT concerns genotype evidence. They can differ. PARTIAL denotes an incompletely resolved structure or adjacency. OVERSIZE marks duplication gains meeting the configured size setting.
+PASS concerns the variant record; FORMAT/FT concerns genotype evidence. They can differ. PARTIAL denotes an incompletely resolved structure or adjacency. OVERSIZE marks duplication gains meeting --max-sv, or INS/DEL records exceeding the optional inclusive --max-indel-size limit. The latter defaults to -1 (disabled), preserves the original type and complete known INS ALT, and does not classify a translocation. --min-inv controls standalone INV independently of the INS/DEL minimum.
 
 Unresolved contexts can contain reliable individual calls. Their diagnostic records should not be treated as additional independent CPX events. CRR is a region annotation, not a variant type. CPX_INTERVALS and BND records alone are not a complete reconstructed allele sequence.
 
@@ -195,3 +207,8 @@ CRR is optional: an incomplete context must contain at least two locally certifi
 Region diagnostics are retained when `--mask` removes variant candidates; metadata declares `region_mask_policy=RETAIN_ALL_DIAGNOSTICS`. `vcf_records` lists only surviving records. The run manifest records region counts, reasons, filenames and hashes. Region localization, connection recovery and complete-event resolution must be evaluated separately. All annotations have SELECTED_PATH scope: rejected or DP-discarded alignments are not recovered by this layer.
 
 The base format is defined by the [VCF specification](https://samtools.github.io/hts-specs/VCFv4.2.pdf). AsmSV-specific fields and interpretations are declared in the output header.
+
+
+## Software identity
+
+Development version 1.4.0.dev0 records `##asmsvVersion=1.4.0.dev0` in every VCF and `software_version` in `.run.json`, alongside per-module source hashes. Earlier 1.3.0 files can lack these explicit version fields. The retired research-only ambiguity trace fields are omitted; production `difference_source` remains available.

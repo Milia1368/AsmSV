@@ -23,6 +23,7 @@ class UnresolvedRegionTests(unittest.TestCase):
     def setUp(self):
         example = fixture.StructureTests()
         example.setUp()
+        SVConfig.SEED_MAX_BASES=20000
         self.ref = example.ref
 
     def detect(self, query, chain, backbone, hap='hap1'):
@@ -99,7 +100,7 @@ class UnresolvedRegionTests(unittest.TestCase):
             else:
                 SVConfig.SEED_MAX_BASES = 100
                 query = ref[:2000]+ref[2100:2200]+ref[2000:2100]+ref[2200:4300]
-                start, expected, category = 2300, 'SEED_BUDGET', 'COMPUTE_LIMIT'
+                start, expected, category = 2300, 'LARGE_RESIDUAL_BUDGET', 'COMPUTE_LIMIT'
             chain = [fixture.block(0, [(7, 2000)], 0, '+', len(query)), fixture.block(start, [(7, 2000)], 2300, '+', len(query))]
             region = self.detect(query, chain, {0, 1}).regions[0]
             self.assertIn(expected, region['reasons'])

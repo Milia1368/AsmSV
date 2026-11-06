@@ -1,5 +1,21 @@
 # Release changes
 
+## 1.4.0.dev0 — local development snapshot, 2026-11-07
+
+This version is local and unreleased. Published stable 1.3.0 remains on release/asmsv-v1.3.0 at commit eb64bc2.
+
+- Use complete EQX CIGAR directly; resolve M with synchronized MD/cs, and use NM only as an aggregate fallback.
+- Use a continuous, capped-gap evaluation length for AQ density while retaining DP rewards and the common coefficients.
+- Recover pure inversions with exact forward flanks before general sequence-search budgets. Optimize the same bounded core model without changing accepted alleles.
+- Keep all known INS sequence in ALT and content-addressed FASTA, independent of length.
+- Add independent --min-inv, optional --max-indel-size and heuristic --max-ref-gap policies. Size never relabels a local INS/DEL as a translocation.
+- Retain certified source/target joins and scoped observed-DEL/INS relations without asserting unique genome-wide origin.
+- Keep bounded allele normalization and the explicitly optional tandem-target output; evaluate representation differences separately from new detection.
+- Remove the unused full-sequence NN verifier, its dormant scoring-view API and unused VCF sequence helpers. Historical source/tests remain in local research archives.
+
+Scores, output interpretation and inferred calls can differ from stable 1.3.0. Record version, source hashes, input alignment provenance and evaluation protocol.
+
+
 ## 1.3.0 maintenance update — 2026-11-03
 
 Supported assembly alignment inputs now use the same `common-assembly-hq-v5` AQ/DP scoring template. Minimap2 asm5/asm10/asm20, Winnowmap and VACmap source declarations no longer select different caller coefficients. Native AS and upstream scoring flags are recorded as provenance and do not supply caller scores.

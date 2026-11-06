@@ -119,9 +119,10 @@ class AQTests(unittest.TestCase):
         strong=block([(7,219),(5,1)])
         self.assertEqual(solve_path([strong,a],220).blocks,(strong,))
 
-    def test_rescue_does_not_invent_difference_evidence_or_ignore_bad_tags(self):
+    def test_rescue_preserves_evidence_requirements_and_MAPQ_gates(self):
         self.assertFalse(block([(0,1000)]).is_valid)
-        self.assertFalse(block([(7,1000)],tags={'NM':-1}).is_valid)
+        self.assertFalse(block([(0,1000)],tags={'NM':-1}).is_valid)
+        self.assertTrue(block([(7,1000)],tags={'NM':-1}).is_valid)
         self.assertFalse(block([(7,1000)],mapq=255).is_valid)
 
     def test_unknown_M_and_NM_only_interval_precision(self):
@@ -351,6 +352,9 @@ class InputAndCLITests(unittest.TestCase):
                 self.assertEqual(sorted((r.info['SVTYPE'],abs(r.info['SVLEN'])) for r in rows),[('DEL',200),('INS',60)])
                 manifest=json.loads(Path(str(out)+'.run.json').read_text())
                 self.assertEqual(manifest['status'],'COMPLETE')
+                from asmsv_next import __version__
+                self.assertEqual(manifest['software_version'],__version__)
+                self.assertIn(f'##asmsvVersion={__version__}',out.read_text())
                 self.assertEqual(manifest['fixed_policy'],fixed_policy())
                 self.assertEqual(manifest['preset']['schema_version'],5)
                 detail=json.loads(next(trace.glob('*.json')).read_text())

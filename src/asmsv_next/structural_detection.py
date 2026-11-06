@@ -13,10 +13,11 @@ import time
 from types import SimpleNamespace
 
 from asmsv_next.config import SVConfig
-from asmsv_next.sequence_check import check_sequence,exact_filler,reverse_complement,shared_seed,exact_inverse_edit,common_prefix
+from asmsv_next.sequence_check import check_sequence,exact_filler,reverse_complement,shared_seed,exact_inverse_edit,common_prefix,exact_flank_model
 from asmsv_next.ssv import make_gap_caller
 from asmsv_next.structures import SVCandidate
 from asmsv_next.nomenclature import duplication_metadata,complex_metadata
+from asmsv_next.sequence_check import MAX_LINEAR_BASES
 
 
 def identifier(prefix,*parts):
@@ -231,6 +232,12 @@ class Detector:
             answer=self.gap_cache[key]
             if answer:self.annotate_context(answer,context)
             return answer
+        answer,handled=self.exact_linear_gap(q0,q1,chrom,r0,r1,strand,context)
+        if not handled:
+            answer,handled=self.padded_linear_gap(q0,q1,chrom,r0,r1,strand,context)
+        if handled:
+            self.gap_cache[key]=answer
+            return answer
         if (1 if strand=='+' else -1)*(r1-r0)<=-SVConfig.MIN_SV_SIZE:
             context['issues'].append('INTRA_FRAME_DUPLICATION_UNRESOLVED')
             self.gap_cache[key]=None;return None
@@ -246,6 +253,50 @@ class Detector:
             answer=self.atom(c,(min(q0,q1),max(q0,q1)),[[min(r0,r1),max(r0,r1)]],
                 [['GAP',q0,q1,r0,r1,strand]],context=context,explained=explained)
         self.gap_cache[key]=answer;return answer
+
+    def exact_linear_gap(self,q0,q1,chrom,r0,r1,strand,context):
+        """Resolve the complete residual before using a net-length heuristic."""
+        sigma=1 if strand=='+' else -1
+        if q1<q0 or sigma*(r1-r0)<0 or self.reference is None:return None,False
+        f=self.sequence[q0:q1].upper()
+        r=self.refseq(chrom,*sorted((r0,r1)),strand)
+        if r is None:return None,False
+        if any(c not in 'ACGT' for c in f):
+            context['issues'].append('ASSEMBLY_GAP');return None,True
+        if any(c not in 'ACGT' for c in r):
+            context['issues'].append('REFERENCE_GAP');return None,True
+        model=exact_flank_model(f,r,k=self.k)
+        if model is None:return None,False
+        if not model.changes:return None,True
+        if len(model.changes)!=1 or model.changes[0]['type']!='GAP':return None,False
+        change=model.changes[0];qs,qe=(q0+x for x in change['query'])
+        a,b=(r0+sigma*x for x in change['reference']);rs,re=sorted((a,b))
+        size=max(qe-qs,re-rs)
+        context.setdefault('sequence_checks',[]).append(dict(status='EXPLAINED',method='EXACT_FLANKS',
+            query=[q0,q1],reference=[chrom,*sorted((r0,r1)),strand],homologies=model.homologies,derived_cigar=[]))
+        if size<SVConfig.MIN_SV_SIZE:return None,True
+        kind='INS' if qe>qs else 'DEL';info=dict(SOURCE='EXACT_GAP',RECHECK_METHOD='EXACT_FLANKS')
+        if kind=='INS':info['SEQ']=f[change['query'][0]:change['query'][1]] if sigma==1 else reverse_complement(f[change['query'][0]:change['query'][1]])
+        candidate=SVCandidate(kind,chrom,rs,size,self.name,info,end=re)
+        candidate.q_start,candidate.q_end=qs,qe;candidate.reference_gap=(rs,re)
+        return self.atom(candidate,(qs,qe),[[rs,re]],[['EXACT_GAP',qs,qe,rs,re,strand]],context=context),True
+
+    def padded_linear_gap(self,q0,q1,chrom,r0,r1,strand,context):
+        left,right=context.get('left_backbone'),context.get('right_backbone')
+        if left is None or right is None:return None,False
+        a,b=self.chain[left],self.chain[right];sigma=1 if strand=='+' else -1
+        if a.ref_name!=chrom or b.ref_name!=chrom or a.strand!=strand or b.strand!=strand:return None,False
+        pad=self.k-1+max(0,q0-q1,sigma*(r0-r1))
+        if (q0-pad<a.qs or q1+pad>b.qe or
+                union_length((s,e) for s,e,_,_ in mapped_parts(a,(q0-pad,q0),exact=True))!=pad or
+                union_length((s,e) for s,e,_,_ in mapped_parts(b,(q1,q1+pad),exact=True))!=pad or
+                map_port(a,q0-pad)!=r0-sigma*pad or map_port(b,q1+pad)!=r1+sigma*pad):
+            return None,False
+        atom,handled=self.exact_linear_gap(q0-pad,q1+pad,chrom,r0-sigma*pad,r1+sigma*pad,strand,context)
+        if handled:
+            context['gap_normalization']=dict(method='EXACT_PADDED_FLANKS',padding=pad,
+                original_query=[q0,q1],original_reference=[chrom,r0,r1,strand])
+        return atom,handled
 
     def sequence_gap(self,q0,q1,chrom,u0,u1,sigma,context):
         """Consume one query-oriented residual. Return atoms and completeness."""
@@ -270,7 +321,7 @@ class Detector:
             if recovered is not None:return recovered,True
         context.setdefault('sequence_checks',[]).append(dict(check_id=identifier('CHECK',self.name,q0,q1,chrom,r0,r1),
             query=[q0,q1],reference=[chrom,min(r0,r1),max(r0,r1),strand],status=result.status,method=result.method,
-            homologies=result.homologies,derived_cigar=result.alignment))
+            homologies=result.homologies,alternative_homologies=result.alternative_homologies,derived_cigar=result.alignment))
         context['issues'].extend(result.issues);atoms=[]
         for change in result.changes:
             qs,qe=(q0+v for v in change['query']);a,b=(u0+v for v in change['reference'])
@@ -289,6 +340,7 @@ class Detector:
                     SEQ=change['sequence'] if sigma==1 else reverse_complement(change['sequence']))
                 length=abs((qe-qs)-(re-rs))
             else:length=re-rs
+            if kind=='INV' and length<SVConfig.min_inv_size():continue
             c=SVCandidate(kind,chrom,rs,length,self.name,info,end=re)
             c.q_start,c.q_end=qs,qe
             atoms.append(self.atom(c,(qs,qe),[[rs,re]],[[kind,qs,qe,rs,re,strand]],context=context))
@@ -371,6 +423,12 @@ class Detector:
                 self.tandem_backbone(context,left,right)
                 self.scan_once(left);self.scan_once(right)
                 return
+            if self.exact_backbone_inversion(context,left,right):
+                self.scan_once(left);self.scan_once(right)
+                return
+            if self.exact_backbone_indel(context,left,right):
+                self.scan_once(left);self.scan_once(right)
+                return
         # Use the actual original blocks for the original tandem overlap guard.
         c=self.kernel(a,b,a.ref_name,a.strand,'backbone',isbackbone=False)
         if c:
@@ -386,6 +444,50 @@ class Detector:
             else:context.update(resolution='RESOLVED',decomposition='SINGLE',frame='COLLINEAR_NO_CALL')
         else:context['issues'].append('INCOMPATIBLE_BACKBONE')
         self.scan_once(left);self.scan_once(right)
+
+    def exact_backbone_indel(self,context,left,right):
+        a,b=self.chain[left],self.chain[right]
+        atom,handled=self.padded_linear_gap(a.qe,b.qs,a.ref_name,exit_port(a),entry(b),a.strand,context)
+        if not handled:atom,handled=self.exact_linear_gap(a.qe,b.qs,a.ref_name,exit_port(a),entry(b),a.strand,context)
+        if not handled:return False
+        context.update(resolution='UNRESOLVED' if context['issues'] else 'RESOLVED',
+            decomposition='SINGLE',frame='LOCAL_INDEL' if atom else 'COLLINEAR_NO_CALL')
+        return True
+
+    def exact_backbone_inversion(self,context,left,right):
+        """Check short and long inverse residuals before net-gap dispatch.
+
+        Exact padding is taken only from owned mapped anchor bases. This can
+        recover an equivalent inversion boundary absorbed into either anchor.
+        """
+        a,b=self.chain[left],self.chain[right];sigma=1 if a.strand=='+' else -1
+        q0,q1=a.qe,b.qs;u0,u1=sigma*exit_port(a),sigma*entry(b)
+        if q1<=q0 or u1<=u0:return False
+        pad=self.k-1
+        if (q0-pad<a.qs or q1+pad>b.qe or
+                union_length((s,e) for s,e,_,_ in mapped_parts(a,(q0-pad,q0),exact=True))!=pad or
+                union_length((s,e) for s,e,_,_ in mapped_parts(b,(q1,q1+pad),exact=True))!=pad or
+                map_port(a,q0-pad)!=sigma*(u0-pad) or map_port(b,q1+pad)!=sigma*(u1+pad)):
+            pad=0
+        f=self.sequence[q0-pad:q1+pad].upper()
+        r=self.refseq(a.ref_name,*sorted((sigma*(u0-pad),sigma*(u1+pad))),a.strand)
+        if r is None:return False
+        model=exact_flank_model(f,r,k=self.k)
+        if model is None or len(model.changes)!=1 or model.changes[0]['type']!='INV':return False
+        change=model.changes[0];s,t=change['reference']
+        rs,re=sorted((sigma*(u0-pad+s),sigma*(u0-pad+t)))
+        qs,qe=(q0-pad+x for x in change['query'])
+        source=[a.ref_name,rs,re,'-' if sigma==1 else '+']
+        segment=dict(block_index=None,query=[qs,qe],source=source)
+        context.update(frame='INV',target_strand=a.strand,source_intervals=[source],
+            segments=[segment],query_span=[qs,qe],target_query_span=[qs,qe])
+        context.setdefault('sequence_checks',[]).append(dict(status='EXPLAINED',method='EXACT_FLANKS',
+            query=[q0-pad,q1+pad],reference=[a.ref_name,*sorted((sigma*(u0-pad),sigma*(u1+pad))),a.strand],
+            homologies=model.homologies,derived_cigar=[],padding=pad))
+        self.frame_junctions(context,[segment],a.ref_name,sigma*(u0-pad+s),sigma*(u0-pad+t),a.strand)
+        self.make_parent('INV',a.ref_name,rs,re,(qs,qe),context,
+            info=dict(FRAME='INV',NET_LEN=0,INV_SPAN=re-rs,RECHECK_METHOD='EXACT_FLANKS'))
+        return True
 
     def claim(self,atom,parent,context,copy=False):
         if atom.parent and atom.parent!=parent.id:
@@ -404,6 +506,30 @@ class Detector:
         return hashlib.sha256(sequence.upper().encode()).hexdigest()
 
     def make_parent(self,kind,chrom,start,end,qspan,context,children=(),info=None,basis=None,basis_reference=False):
+        if kind=='INV' and not children and len(context.get('source_intervals',[]))==1:
+            from asmsv_next.allele_normalization import canonical_inversion
+            orientation=context.get('target_strand',self.strand)
+            normalized=canonical_inversion(self.reference,chrom,start,end,self.sequence,qspan,orientation,self.k-1)
+            if normalized is not None:
+                old_start,old_end,old_query=start,end,qspan
+                start,end,qspan=normalized
+                source=[chrom,start,end,'-' if orientation=='+' else '+']
+                context['original_source_intervals']=context['source_intervals']
+                context['source_intervals']=[source]
+                context['original_junctions']=context.get('junctions',[])
+                context['query_span']=context['target_query_span']=list(qspan)
+                context['inversion_normalization']=dict(method='EXACT_BOUNDARY_EQUIVALENCE',
+                    original_reference=[old_start,old_end],original_query=list(old_query),
+                    reference=[start,end],query=list(qspan))
+                sigma=1 if orientation=='+' else -1
+                first,last=(start,end) if sigma==1 else (end,start)
+                self.frame_junctions(context,[dict(block_index=None,query=list(qspan),source=source)],chrom,first,last,orientation)
+                for edge in context['junctions']:edge['evidence']='ALLELE_EQUIVALENT_PORTS'
+                info=dict(info or {},INV_SPAN=end-start)
+        if kind=='INV' and end-start<SVConfig.min_inv_size():
+            context.update(frame='BELOW_MIN_INV',resolution='RESOLVED',decomposition='NONE',junctions=[],
+                size_policy=dict(kind='INV',length=end-start,minimum=SVConfig.min_inv_size()))
+            return None
         metadata=dict(SOURCE='STRUCTURE',RESOLUTION='RESOLVED',DECOMPOSITION='COUPLED' if kind=='CPX' else 'SINGLE',
             CONTEXT_ID=context['context_id'],ROLE='EVENT',EVIDENCE_SCOPE='SELECTED_PATH',ALT_ASSESSMENT='NOT_AVAILABLE')
         metadata.update(info or {})
@@ -489,7 +615,7 @@ class Detector:
             if point is None:context['issues'].append('UNMAPPED_DUP_PORT');return
             u0=sigma*point;normalization='MICROHOMOLOGY';qb=qa
         elif gap>0:
-            if gap>SVConfig.SEED_MAX_BASES:
+            if gap>MAX_LINEAR_BASES:
                 context['issues'].append('DUP_JUNCTION_BUDGET');return
             filler=self.sequence[qa:qb].upper()
             if any(c not in 'ACGT' for c in filler):
@@ -711,8 +837,9 @@ class Detector:
             if not complete or not self.safe_children(children,context):
                 context['issues'].append('COMPONENTS_UNEXPLAINED')
                 # The inversion itself remains observable even when the larger grouping is partial.
-                c=SVCandidate('INV',a.ref_name,ls,le-ls,self.name,dict(SOURCE='STRUCTURE',CONTEXT_ID=context['context_id'],RESOLUTION='PARTIAL'),filter_str='PARTIAL')
-                self.atom(c,(bounds[members[0]][0],bounds[members[-1]][1]),[[ls,le]],[['INV',ls,le]],context=context)
+                if le-ls>=SVConfig.min_inv_size():
+                    c=SVCandidate('INV',a.ref_name,ls,le-ls,self.name,dict(SOURCE='STRUCTURE',CONTEXT_ID=context['context_id'],RESOLUTION='PARTIAL'),filter_str='PARTIAL')
+                    self.atom(c,(bounds[members[0]][0],bounds[members[-1]][1]),[[ls,le]],[['INV',ls,le]],context=context)
                 return
             p0=slo if lsep or not left_atoms else target0;p1=shi if rsep or not right_atoms else target1
             start,end=sorted((sigma*p0,sigma*p1));ins,deleted=self.edit_lengths(children)
@@ -771,8 +898,12 @@ class Detector:
             else:
                 atom=self.emit_gap(q0,q1,a.ref_name,sigma*target0,sigma*target1,a.strand,context,'backbone')
                 if atom:
+                    info.update(TARGET_CHR=atom.candidate.chrom,TARGET_POS=atom.candidate.pos)
                     atom.candidate.info.update(info,INS_ORIGIN='TEMPLATED',RESOLUTION='RESOLVED',TEMPLATE_COUNT=1)
                     context.update(resolution='RESOLVED',decomposition='SINGLE')
+                    if complete and filler==0 and target0==target1:
+                        self.frame_junctions(context,descriptions,a.ref_name,sigma*target0,sigma*target1,a.strand)
+                        context['source_join_atoms']=[atom.atom_id]
                 else:context['issues'].append('INSERTION_KERNEL_NOT_ACCEPTED')
         elif len(runs)==2 and not children and complete:
             if runs[0]['source'][0]==runs[1]['source'][0] and runs[0]['source'][3]==runs[1]['source'][3]:
@@ -842,10 +973,11 @@ class Detector:
                 if ref is None:continue
                 if sequence==ref:hits.append((s,t,'DIRECT'))
                 if sequence==reverse_complement(ref):hits.append((s,t,'INVERTED'))
-            if not hits and atom.block_index is not None and length<=SVConfig.SEED_MAX_BASES and len(atom.parts)==1 and atom.parts[0][0]==1:
+            if ((not hits or not any(self.retained(c.chrom,s,t,atom.query) for s,t,_ in hits)) and length<=MAX_LINEAR_BASES and atom.query[1]-atom.query[0]==length and
+                    all(a==b for a,b in atom.reference_parts)):
                 # A pure insertion may slide through <k identical anchor bases.
                 # Verify allele equivalence before testing the normalized port.
-                direction=1 if self.chain[atom.block_index].strand=='+' else -1
+                direction=1 if (self.chain[atom.block_index].strand if atom.block_index is not None else self.strand)=='+' else -1
                 for distance in range(1,self.k):
                     normalized=[]
                     for delta in (-distance,distance):
@@ -871,15 +1003,15 @@ class Detector:
                             if shifted==ref:normalized.append((s,t,'DIRECT',target,span,delta))
                             if shifted==reverse_complement(ref):normalized.append((s,t,'INVERTED',target,span,delta))
                     if normalized:
-                        unique=list(dict.fromkeys(normalized))
+                        unique=[hit for hit in dict.fromkeys(normalized) if self.retained(c.chrom,hit[0],hit[1],hit[4])]
                         if len(unique)==1:
                             s,t,orientation,target,span,delta=unique[0]
-                            if self.retained(c.chrom,s,t,span):
-                                atom.source_query=span
-                                c.info.update(duplication_metadata(c.chrom,s,t,c.chrom,target,orientation),SOURCE_STATE='RETAINED',
-                                    INS_ORIGIN='DUPLICATION',TEMPLATE_COUNT=1,DUP_NORMALIZATION='INS_ANCHOR_SHIFT')
-                        else:c.info.update(SOURCE_STATE='UNKNOWN',SOURCE_ISSUE='SOURCE_AMBIGUOUS')
-                        return
+                            atom.source_query=span
+                            c.info.update(duplication_metadata(c.chrom,s,t,c.chrom,target,orientation),SOURCE_STATE='RETAINED',
+                                INS_ORIGIN='DUPLICATION',TEMPLATE_COUNT=1,DUP_NORMALIZATION='INS_ANCHOR_SHIFT')
+                            return
+                        if len(unique)>1:
+                            c.info.update(SOURCE_STATE='UNKNOWN',SOURCE_ISSUE='SOURCE_AMBIGUOUS');return
         if mode=='local' and not hits:
             s=max(0,p-SVConfig.COPY_SOURCE_RADIUS)
             t=min(self.reference.get_reference_length(c.chrom),p+SVConfig.COPY_SOURCE_RADIUS+length)

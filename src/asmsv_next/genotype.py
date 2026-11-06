@@ -218,7 +218,7 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     new_sv.genotype = gt
     new_sv.info['SUPPORT_H1'] = len(hap_names[0]) or int(has_h1)
     new_sv.info['SUPPORT_H2'] = len(hap_names[1]) or int(has_h2)
-    for key in ('ATOM_ID','CONTEXT_ID','PARENT_EVENT','REGION_ID'):
+    for key in ('ATOM_ID','CONTEXT_ID','PARENT_EVENT','REGION_ID','RELOCATION_ID'):
         values={part for sv in cluster for part in str(sv.info.get(key,'')).split(',') if part}
         if values:new_sv.info[key]=','.join(sorted(values))
     if any(sv.info.get('ROLE')=='SIMPLE' for sv in cluster):new_sv.info['ROLE']='SIMPLE'
@@ -234,8 +234,8 @@ def _merge_candidates(cluster: List[SVCandidate]) -> Optional[SVCandidate]:
     if merged_pvents:
         new_sv.info['PEVENT'] = ','.join(sorted(merged_pvents))
     if rep.type == 'INS':
-        source_fields=('TOPOLOGY','SOURCE_STATE','SOURCE_CHR','SOURCE_START','SOURCE_END','DUP_ORIENT','DUP_MODE')
-        if any(sv.info.get('TOPOLOGY')=='DUP' for sv in cluster):
+        source_fields=('TOPOLOGY','SOURCE_STATE','SOURCE_CHR','SOURCE_START','SOURCE_END','SOURCE_ORIENT','DUP_ORIENT','DUP_MODE')
+        if any(sv.info.get('TOPOLOGY')=='DUP' or sv.info.get('SOURCE_STATE')=='REMOVED' for sv in cluster):
             proofs={tuple(sv.info.get(key) for key in source_fields) for sv in cluster}
             if len(proofs)!=1:
                 # Identical inserted alleles do not imply identical retained

@@ -28,9 +28,20 @@ origin.json
 /docs/*
 !/docs/USAGE.md
 !/docs/OUTPUT_FORMAT.md
+!/docs/CSV_EXAMPLES_EN.md
+!/docs/CSV_EXAMPLES_ZH.md
 
 # Local research, release audits and experiment-specific helpers.
 /benchmarks/
 /release_manifest.json
 /scripts/audit_duplication_alleles.py
 /scripts/evaluate_csv_simulation.py
+
+# Curated, fixed-size real-output examples (not generated whole-genome output).
+!/examples/csv/data/calls.vcf
+!/examples/csv/data/calls.vcf.components.vcf
+!/examples/csv/data/calls.vcf.indels.vcf
+!/examples/csv/data/calls.vcf.junctions.vcf
+!/examples/csv/data/calls.vcf.events.jsonl
+!/examples/csv/data/calls.vcf.regions.jsonl
+!/examples/csv/data/calls.vcf.regions.bed

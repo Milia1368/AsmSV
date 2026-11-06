@@ -51,9 +51,10 @@ class AlignedSegment:
 
     def _refine_edges(self):
         if not self.summary.positional:return
-        anchors=[r for r in self.score_root.index.runs if r.op==7 and r.qe-r.qs>=SVConfig.CALLER_PRESET.aq.min_anchor]
+        anchors=[r for r in self.score_root.index.local_runs(self.qs,self.qe)
+                 if r.op==7 and min(self.qe,r.qe)-max(self.qs,r.qs)>=SVConfig.CALLER_PRESET.aq.min_anchor]
         if not anchors:return
-        start,end=anchors[0].qs,anchors[-1].qe
+        start,end=max(self.qs,anchors[0].qs),min(self.qe,anchors[-1].qe)
         if (start,end)==(self.qs,self.qe):return
         cigar,rs,re=self.score_root.cigar_view(start,end)
         self.qs,self.qe,self.cigar,self.ref_start,self.ref_end=start,end,cigar,rs,re

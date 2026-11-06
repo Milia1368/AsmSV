@@ -130,7 +130,7 @@ class GapEvent:
 @dataclass(frozen=True, slots=True)
 class ScoreSummary:
     sequence_score: Optional[float]
-    evaluation_length: int
+    evaluation_length: float
     internal_structure_cost: float
     matches: Optional[float]
     mismatches: Optional[float]
@@ -138,7 +138,7 @@ class ScoreSummary:
 
     @property
     def aq(self):
-        return None if self.sequence_score is None or not self.evaluation_length else self.sequence_score / self.evaluation_length
+        return None if self.sequence_score is None or not self.evaluation_length else self.node_reward / self.evaluation_length
 
     @property
     def node_reward(self):
@@ -203,7 +203,7 @@ class RunIndex:
                     f = run.mismatch_fraction
                     row = (0.0 if f is None else MATCH_REWARD * (1 - f) - preset.mismatch * f, 0.0, 1.0, 0.0 if f is None else 1 - f, 0.0 if f is None else f, float(f is None), float(not run.positional))
                 elif n >= preset.structural_gap_min:
-                    row = (0.0, preset.gap_cost(n) / n, 0.0, 0.0, 0.0, 0.0, 0.0)
+                    row = (0.0, preset.gap_cost(n) / n, preset.structural_gap_min / n, 0.0, 0.0, 0.0, 0.0)
                 else:
                     row = (-preset.gap_cost(n) / n, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0)
                 self.coefficients[key] = row
@@ -216,7 +216,7 @@ class RunIndex:
         points = [(0.0, 0.0, 0.0)]
         for gap in deletions:
             length = gap.reference_interval.length
-            delta = (0.0, gap.cost, 0.0) if gap.structural else (-gap.cost, 0.0, float(length))
+            delta = (0.0, gap.cost, float(preset.structural_gap_min)) if gap.structural else (-gap.cost, 0.0, float(length))
             points.append(tuple((a + b for a, b in zip(points[-1], delta))))
         self.deletion_prefix = tuple(points)
 
@@ -243,7 +243,7 @@ class RunIndex:
             row[1] += delta[1]
             row[2] += delta[2]
         known = row[5] < 0.5
-        return ScoreSummary(row[0] if known else None, int(round(row[2])), row[1], row[3] if known else None, row[4] if known else None, known and row[6] < 0.5)
+        return ScoreSummary(row[0] if known else None, row[2], row[1], row[3] if known else None, row[4] if known else None, known and row[6] < 0.5)
 
     def local_runs(self, start, end):
         lo = max(0, bisect_right(self.ends, start) - 1)
@@ -256,7 +256,8 @@ class RunIndex:
         return tuple((g for _, g in sorted(self._query_gaps[lo:hi], key=lambda x: x[0])))
 
 class EvidenceRoot:
-    __slots__=('raw','preset','geometry','geometry_query_order','geometry_starts','geometry_ends','index','issues')
+    __slots__=('raw','preset','geometry','geometry_query_order','geometry_starts','geometry_ends','index','issues',
+               'difference_source')
 
     def __init__(self, raw, preset):
         self.raw, self.preset = (raw, preset)
@@ -264,9 +265,10 @@ class EvidenceRoot:
         self.geometry_query_order = self.geometry if raw.strand == '+' else self.geometry[::-1]
         self.geometry_starts = tuple((run.qs for run in self.geometry_query_order))
         self.geometry_ends = tuple((run.qe for run in self.geometry_query_order))
+        m_bases = sum(n for op, n in raw.cigar if op == 0)
         tags, issues = (dict(raw.tags), list(raw.issues))
         annotations, origin = (None, 'EQX')
-        for kind in ('MD', 'cs'):
+        for kind in ('MD', 'cs') if m_bases else ():
             if kind not in tags:
                 continue
             try:
@@ -286,14 +288,21 @@ class EvidenceRoot:
                     issues.append('MD_CS_CONFLICT')
             except (TagError, TypeError, ValueError):
                 issues.append('INVALID_' + kind.upper())
-        m_bases = sum((n for op, n in raw.cigar if op == 0))
-        explicit_x = sum((n for op, n in raw.cigar if op == 8))
-        indels = sum((n for op, n in raw.cigar if op in (1, 2)))
-        nm = tags.get('NM')
-        nm_valid = type(nm) is int and nm >= 0 and (0 <= nm - indels - explicit_x <= m_bases)
-        if 'NM' in tags and (not nm_valid):
-            issues.append('NM_UNRECONCILED' if type(nm) is int and nm >= 0 else 'INVALID_NM')
-        fraction = (nm - indels - explicit_x) / m_bases if nm_valid and m_bases else None
+        # Only unresolved M needs an aggregate NM estimate.
+        fraction = None
+        nm_valid = False
+        if m_bases and annotations is None:
+            indels = sum(n for op, n in raw.cigar if op in (1, 2))
+            explicit_x = sum(n for op, n in raw.cigar if op == 8)
+            nm = tags.get('NM')
+            nm_valid = type(nm) is int and 0 <= nm - indels - explicit_x <= m_bases
+            if nm_valid:
+                fraction = (nm - indels - explicit_x) / m_bases
+            elif 'NM' in tags:
+                issues.append('NM_UNRECONCILED' if type(nm) is int and nm >= 0 else 'INVALID_NM')
+        self.difference_source = (
+            'CIGAR_EQX' if not m_bases else origin if annotations is not None
+            else 'NM_ESTIMATE' if nm_valid else 'UNKNOWN')
         runs, gaps = ([], [])
         for index, run in enumerate(self.geometry):
             op, length = raw.cigar[index]
@@ -311,11 +320,6 @@ class EvidenceRoot:
                     issues.append('REFERENCE_SKIP')
                 gaps.append(GapEvent(stable_id('GAP', raw.alignment_id, index), raw.alignment_id, op, Interval(run.qs, run.qe), Interval(run.rs, run.re), preset.gap_cost(length), length >= preset.structural_gap_min))
         self.index = RunIndex(runs, gaps, preset)
-        summary = self.index.score(raw.qs, raw.qe)
-        if summary.positional and nm_valid:
-            observed = sum((r.qe - r.qs for r in runs if r.op == 8)) + indels
-            if observed != nm:
-                issues.append('NM_UNRECONCILED')
         self.issues = tuple(sorted(set(issues)))
 
     def mapped_bounds(self, start, end):

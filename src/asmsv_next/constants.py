@@ -23,4 +23,6 @@ def fixed_policy():
         excess_overlap_start=DP_EXCESS_OVERLAP_START,reference_rate=DP_REFERENCE_RATE,
         reference_cap=DP_REFERENCE_CAP,weak_TRA_premium_ratio=DP_WEAK_TRA_PREMIUM_RATIO,
         structural_unit='structural_gap_min',admission='known_legal_positive_reward',
-        overlap='local_max',topology='additive',TRA_surcharge='information')
+        overlap='local_max',topology='additive',TRA_surcharge='information',
+        aq_density='unfloored_reward_over_capped_gap_evaluation_length_v2',
+        exact_linear_base_budget=2000000,sparse_seed_point_budget=20000,sparse_seed_mask=127)

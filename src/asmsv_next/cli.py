@@ -49,6 +49,9 @@ def arguments(argv=None):
     p.add_argument('--scratch-dir',help='Temporary BAM sorting and structural evidence directory; defaults to the system temporary directory. Final JSONL evidence is retained with the VCF')
     p.add_argument('--trace-dir',help='Optional per-contig AQ, DP and candidate diagnostics without sequences')
     p.add_argument('--min-mapq',type=int,default=10);p.add_argument('--min-sv',type=int,default=30)
+    p.add_argument('--min-inv','--min-inv-size',dest='min_inv',type=int,help='Minimum reported standalone INV size; defaults to --min-sv; does not change CPX frame interpretation')
+    p.add_argument('--max-indel-size',type=int,default=-1,help='Inclusive reporting size limit for INS/DEL records; larger records retain their type with OVERSIZE; -1 disables')
+    p.add_argument('--max-ref-gap',type=int,default=150000,help='Reference-gap limit for heuristic fallback only; exact pure indels and CIGAR evidence are separate; not a TRA classification rule')
     p.add_argument('--max-sv',type=int,default=1500000,help='Retained legacy duplication OVERSIZE threshold, not a universal size filter')
     p.add_argument('--mask',help='Exclude candidates overlapping this BED; not an annotation-only input')
     p.add_argument('--debug',action='store_true')
@@ -58,6 +61,7 @@ def arguments(argv=None):
     p.add_argument('--dup-source-search','--copy-source-search',dest='copy_source_search',choices=('off','adjacent','local'),default='adjacent')
     p.add_argument('--dup-source-radius','--copy-source-radius',dest='copy_source_radius',type=int,default=100000,help='Optional local source-start search radius; does not define DUP')
     p.add_argument('--junction-vcf',action='store_true',help='Write an additional read-only BND projection; does not add main events')
+    p.add_argument('--tandem-target-indels',action='store_true',help='Also write a reference-indel view with exactly equivalent tandem INS at the declared copy target; benchmark representation must be specified')
     p.add_argument('--vcf-info',choices=('minimal','full'),default='minimal',help='Biological annotations by default; full also exports diagnostic fields')
     p.add_argument('--sample', default='SAMPLE', help='VCF sample name, e.g. HG002')
     p.add_argument('--genotyping', choices=('assembly','evidence','presence'), default='assembly', help='Structured detector: assembly retains dosage estimates with FT confidence flags; evidence makes unsupported counterparts missing; presence reproduces the previous policy')
@@ -66,6 +70,9 @@ def arguments(argv=None):
     if a.threads<1 or not 0<=a.min_mapq<255 or a.min_sv<1:
         p.error('Invalid worker count, minimum size or MAPQ')
     if a.max_sv!=-1 and a.max_sv<a.min_sv:p.error('max-sv is smaller than min-sv')
+    if a.min_inv is not None and a.min_inv<1:p.error('min-inv must be positive')
+    if a.max_indel_size!=-1 and a.max_indel_size<a.min_sv:p.error('max-indel-size is smaller than min-sv')
+    if a.max_ref_gap<1:p.error('max-ref-gap must be positive')
     if a.seed_max_bases<1 or a.seed_max_blocks<1 or a.copy_source_radius<0:p.error('Invalid sequence-check budget')
     if a.replacement_realign=='fallback' and importlib.util.find_spec('pywfa') is None:p.error('--replacement-realign fallback requires the optional pywfa package')
     return a
@@ -180,7 +187,7 @@ def run(argv=None):
         handlers=[logging.StreamHandler(),logging.FileHandler(str(out)+'.log')],force=True)
     if os.environ.get('ASMSV_OWNER_PID'):arm_parent_death(int(os.environ['ASMSV_OWNER_PID']))
     signal.signal(signal.SIGTERM,raise_termination);signal.signal(signal.SIGHUP,raise_termination)
-    manifest=dict(status='RUNNING',started_at=datetime.now(timezone.utc).isoformat(),argv=list(argv or sys.argv[1:]),
+    manifest=dict(status='RUNNING',software_version=__version__,started_at=datetime.now(timezone.utc).isoformat(),argv=list(argv or sys.argv[1:]),
         implementation=str(Path(__file__).resolve().parent),inputs={},csv_policy='finite-structure-v2',
         annotation_schema='asmsv-sv-annotation-v3',vcf_info=a.vcf_info,
         runtime=dict(python=sys.version,pysam=pysam.__version__,samtools=pysam.__samtools_version__,
@@ -188,7 +195,7 @@ def run(argv=None):
         genotyping=a.genotyping,sample=a.sample)
     manifest['implementation_sha256']={path.name:file_digest(path) for path in sorted(Path(__file__).resolve().parent.glob('*.py'))}
     record=Path(str(out)+'.run.json')
-    scratch=None
+    scratch=None;sequences=None
     try:
         for key in ('bam1','bam2','ref','query_fasta1','query_fasta2','mask'):
             value=getattr(a,key)
@@ -207,6 +214,8 @@ def run(argv=None):
             preset=resolve_preset(a.aligner,mode,preset_file=a.preset_file)
             SVConfig.CALLER_PRESET=preset;SVConfig.MIN_MAPQ=a.min_mapq
             SVConfig.MIN_SV_SIZE=a.min_sv;SVConfig.MAX_SV_SIZE=a.max_sv
+            SVConfig.MIN_INV_SIZE=a.min_inv;SVConfig.MAX_INDEL_SIZE=a.max_indel_size
+            SVConfig.MIN_TRA_SIZE=a.max_ref_gap
             SVConfig.DETECTOR='structured';SVConfig.REFERENCE_FASTA=str(Path(a.ref).resolve())
             SVConfig.SEED_MAX_BASES=a.seed_max_bases;SVConfig.SEED_MAX_BLOCKS=a.seed_max_blocks
             SVConfig.REPLACEMENT_REALIGN=a.replacement_realign
@@ -245,10 +254,14 @@ def run(argv=None):
                 h1,s1=run_haplotype(paths[0],'hap1',a.threads,mask,a.query_fasta1,trace)
             with run_stage(manifest,record,'call_hap2'):
                 h2,s2=run_haplotype(paths[1],'hap2',a.threads,mask,a.query_fasta2,trace)
+            from asmsv_next.relocation import link_relocations
+            relations=link_relocations(h1,'hap1',ref,SVConfig.STRUCTURE_DIR)+link_relocations(h2,'hap2',ref,SVConfig.STRUCTURE_DIR)
+            manifest['relocation_summary']=dict(relations=len(relations),scope='HAPLOTYPE_DELETION_CANDIDATES')
             writing_started=time.monotonic()
             manifest['stage']='genotype_and_write';save_json(record,manifest)
             logger.info('Starting cross-haplotype genotyping and output')
-            (variants, aliases) = cluster_structural_calls(h1, h2)
+            from asmsv_next.allele_normalization import canonical_insertions
+            (variants, aliases) = cluster_structural_calls(canonical_insertions(h1,ref), canonical_insertions(h2,ref))
             for c in variants:
                 if c.info.get('PARENT_EVENT'):
                     c.info['PARENT_EVENT']=','.join(sorted({aliases.get(k,k) for k in c.info['PARENT_EVENT'].split(',')}))
@@ -262,8 +275,13 @@ def run(argv=None):
             genotype_summary={}
             record_maps=[]
             region_links=defaultdict(list)
+            from asmsv_next.sequence_output import SequenceStore
+            sequences=SequenceStore(str(out)+'.sequences.fa')
             def output_view(calls,path,view):
+                from asmsv_next.structures import apply_indel_size_policy
+                apply_indel_size_policy(calls)
                 if evidence is not None:evidence.apply(calls,policy=a.genotyping)
+                for candidate in calls:sequences.annotate(candidate)
                 genotype_summary[view]=summarize_genotypes(calls)
                 mapping=Path(SVConfig.STRUCTURE_DIR,view+'.records.jsonl')
                 with mapping.open('w',buffering=4*1024*1024) as records:
@@ -280,15 +298,28 @@ def run(argv=None):
             def reference_indels(calls):
                 return [c for c in calls if c.type in ('INS','DEL') and not (
                     c.info.get('ROLE')=='COMPONENT' and c.info.get('ALLELE_CONTEXT') in ('ADDED_DUPLICATE','DUPLICATION_JUNCTION'))]
-            projected=cluster_and_genotype(reference_indels(h1),reference_indels(h2))
+            from asmsv_next.allele_normalization import canonical_tandem_indels
+            parents={c.id:c for c in h1+h2 if c.type=='DUP'}
+            normalized_haps=[canonical_insertions(reference_indels(calls),ref,indel_view=True) for calls in (h1,h2)]
+            projected=cluster_and_genotype(
+                *normalized_haps)
             for c in projected:
                 if c.info.get('PARENT_EVENT'):
                     c.info['PARENT_EVENT']=','.join(sorted({aliases.get(k,k) for k in c.info['PARENT_EVENT'].split(',')}))
             output_view(projected,indels,'indels')
+            target_indels=None
+            if a.tandem_target_indels:
+                target_indels=Path(str(out)+'.target_indels.vcf')
+                target_calls=cluster_and_genotype(*(canonical_tandem_indels(calls,parents,ref) for calls in normalized_haps))
+                for candidate in target_calls:
+                    if candidate.info.get('PARENT_EVENT'):
+                        candidate.info['PARENT_EVENT']=','.join(sorted({aliases.get(k,k) for k in candidate.info['PARENT_EVENT'].split(',')}))
+                output_view(target_calls,target_indels,'target_indels')
             region_spool=Path(SVConfig.STRUCTURE_DIR,'regions.spool.jsonl')
             with graph.open('w',buffering=4*1024*1024) as stream,region_spool.open('w',buffering=4*1024*1024) as region_stream:
                 junction_haps={'hap1':[],'hap2':[]}
                 stream.write(json.dumps(dict(record_kind='EVENT_ALIASES',aliases=aliases),ensure_ascii=False)+'\n')
+                for relation in relations:stream.write(json.dumps(relation,ensure_ascii=False,allow_nan=False)+'\n')
                 for mapping in record_maps:
                     with mapping.open() as records:shutil.copyfileobj(records,stream)
                 for path in sorted(Path(SVConfig.STRUCTURE_DIR).glob('*.json')):
@@ -300,6 +331,7 @@ def run(argv=None):
                         from asmsv_next.output_views import junction_candidates
                         junction_haps[data['haplotype']].extend(junction_candidates(data,aliases))
             manifest['views']=dict(components=str(components),indels=str(indels),events=str(graph))
+            if target_indels is not None:manifest['views']['target_indels']=str(target_indels)
             if a.junction_vcf:
                 junction_path=Path(str(out)+'.junctions.vcf')
                 output_view(cluster_and_genotype(junction_haps['hap1'],junction_haps['hap2']),junction_path,'junctions')
@@ -309,6 +341,10 @@ def run(argv=None):
             region_report=write_regions(SVConfig.STRUCTURE_DIR,record_maps,out,aliases,contigs,mask_applied=bool(a.mask),record_links=region_links,region_source=region_spool)
             manifest['views'].update(regions=region_report['jsonl'],regions_bed=region_report['bed'])
             manifest['region_summary']=region_report
+            sequences.finish()
+            manifest['views']['sequences']=str(sequences.path)
+            if sequences.seen:manifest['views']['sequence_index']=str(sequences.path)+'.fai'
+            manifest['sequence_summary']=dict(unique_payloads=len(sequences.seen),bases=sum(sequences.seen.values()))
             genotype_report=Path(str(out)+'.genotypes.json')
             save_json(genotype_report,dict(schema='asmsv-genotypes-v1',sample=a.sample,policy=a.genotyping,views=genotype_summary))
             manifest['genotype_summary']=genotype_summary
@@ -328,6 +364,7 @@ def run(argv=None):
     finally:
         manifest['elapsed_seconds']=time.monotonic()-started
         manifest['finished_at']=datetime.now(timezone.utc).isoformat();save_json(record,manifest)
+        if sequences is not None:sequences.abort()
         if scratch is not None:scratch.cleanup()
     return 0
 

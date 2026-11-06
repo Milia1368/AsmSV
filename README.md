@@ -11,13 +11,13 @@
 
 **AsmSV: Assembly-based Haplotype-Resolved Structural Variant Caller**
 
-[Installation](#installation) · [Quick start](#quick-start) · [User guide](docs/USAGE.md) · [Output format](docs/OUTPUT_FORMAT.md) · [Citation](#citation)
+[Installation](#installation) · [Quick start](#quick-start) · [User guide](docs/USAGE.md) · [Output format](docs/OUTPUT_FORMAT.md) · [CSV examples](docs/CSV_EXAMPLES_EN.md) / [中文](docs/CSV_EXAMPLES_ZH.md) · [Citation](#citation)
 
 ## Introduction
 
 AsmSV detects structural variants from two haplotype-resolved genome assemblies aligned to the same reference. It takes one BAM per haplotype and writes VCF 4.2 records with genotype and structural annotations.
 
-Version **1.3.0** uses one common AQ/DP scoring template across supported assembly aligners, retains incomplete-region evidence, and provides a CSV browser/export command. BAM sorting caches remain reusable between runs. The package name remains **AsmSV**, and the command remains **`asmSV`**. See [release changes and compatibility](CHANGELOG.md).
+This local checkout is **1.4.0.dev0**, an unreleased algorithm update with CIGAR-first evidence scoring, exact flanked inversion recovery, complete known insertion payloads and independent size-reporting policies. The published stable branch remains **1.3.0**. Both use one common AQ/DP scoring template across supported assembly aligners and retain incomplete-region evidence. BAM sorting caches remain reusable between runs. The package name remains **AsmSV**, and the command remains **`asmSV`**. See [release changes and compatibility](CHANGELOG.md).
 
 ### Features
 
@@ -31,7 +31,7 @@ Version **1.3.0** uses one common AQ/DP scoring template across supported assemb
 
 Requirements: Python **3.10+**, `pysam>=0.19` and `edlib>=1.3.9`. Linux is the tested platform. A pysam build with **libdeflate** is recommended for fast BAM compression.
 
-### Conda installation (recommended)
+### Stable 1.3.0 installation (recommended)
 
 Create an environment with a libdeflate-enabled pysam before installing AsmSV. The following Linux setup uses the validated `defaults` build; pip installs edlib with AsmSV:
 
@@ -62,7 +62,7 @@ asmSV --help
 
 Python dependencies are installed automatically; compression performance depends on the pysam build. See [temporary storage and installation checks](docs/USAGE.md#memory-and-temporary-files).
 
-For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
+For the local development checkout, install from this directory and verify that asmSV --version reports 1.4.0.dev0. The GitHub commands above intentionally select stable 1.3.0. For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
 
 ### Update an existing installation
 
@@ -130,6 +130,8 @@ asmSV-cpx --vcf calls.vcf --scope csv --out-prefix calls.csv
 ```
 
 Open `calls.csv.html` in a browser. The tool also writes `calls.csv.jsonl` and `calls.csv.verix.vcf`, preserving original SVTYPE and genotypes. Default scope includes CPX, inverted/dispersed DUP and local DELINS replacements, classified by the export-only ASMSV_CSV_CLASS field. Use `--scope cpx` for the previous CPX-only population. It does not rerun detection. See the [selection rules, format and VERIX usage](docs/OUTPUT_FORMAT.md#csv-browser-and-verix-export).
+
+Worked CSV examples with a small real-output subset: [English](docs/CSV_EXAMPLES_EN.md), [中文](docs/CSV_EXAMPLES_ZH.md). They cover parent/component links, copy-local edits, zero-net replacements and incomplete regions.
 
 ## Installation example
 

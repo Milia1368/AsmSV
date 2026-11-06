@@ -8,6 +8,16 @@ import pysam
 from asmsv_next.config import SVConfig
 logger = logging.getLogger(__name__)
 
+def apply_indel_size_policy(calls):
+    """Apply an optional reporting cap without inferring another SV type."""
+    limit=SVConfig.MAX_INDEL_SIZE
+    if limit==-1:return
+    for candidate in calls:
+        if candidate.type in ('INS','DEL') and candidate.sv_len>limit:
+            filters=set(candidate.filter.split(';'))-{'PASS','.'}
+            candidate.filter=';'.join(sorted(filters|{'OVERSIZE'}))
+
+
 class SVCandidate:
     """
     Data structure representing an identified Structural Variant Candidate.
@@ -95,7 +105,9 @@ class SVCandidate:
             use_full_seq = SVConfig.ENABLE_LARGE_SEQUENCE or self.sv_len < SVConfig.MAX_ALLELE_LEN
             if self.type == 'INS':
                 ins_seq = self.info.get('SEQ', '')
-                alt_val = anchor_base + ins_seq if ins_seq and use_full_seq else '<INS>'
+                # A display threshold must not discard an observed insertion.
+                # The CLI additionally writes a deduplicated FASTA and hashes.
+                alt_val = anchor_base + ins_seq if ins_seq else '<INS>'
             elif self.type == 'DEL':
                 if reference and use_full_seq:
                     deleted_seq = self._safe_fetch_ref(reference, self.chrom, self.pos, self.end)

@@ -5,8 +5,10 @@ class SVConfig:
     and complex SV identification.
     """
     MIN_SV_SIZE = 30
+    MIN_INV_SIZE = None
+    MAX_INDEL_SIZE = -1
     MAX_SV_SIZE = 1500000
-    MIN_TRA_SIZE = 150000
+    MIN_TRA_SIZE = 150000  # Legacy name: reference-gap bound for heuristic fallback, not a TRA definition.
     MIN_MAPQ = 10
     MAX_ALLELE_LEN = 10000
     ENABLE_LARGE_SEQUENCE = False
@@ -34,3 +36,7 @@ class SVConfig:
     SEQUENCE_TRANSPORT = 'auto'
     EXACT_INVERSE_MAX_BASES = 40000
     EXACT_INVERSE_MIN_COVERAGE = 0.8
+
+    @classmethod
+    def min_inv_size(cls):
+        return cls.MIN_SV_SIZE if cls.MIN_INV_SIZE is None else cls.MIN_INV_SIZE

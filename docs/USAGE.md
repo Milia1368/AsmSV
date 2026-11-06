@@ -1,5 +1,7 @@
 # AsmSV user guide
 
+This checkout describes local **1.4.0.dev0**. Published stable 1.3.0 has different calling behavior; retain the version, source hashes and input provenance when comparing runs. The run manifest records `software_version`, and VCF headers record `asmsvVersion`.
+
 ## Inputs
 
 AsmSV requires `--bam1`, `--bam2`, `--ref` and `--aligner`. Both BAMs must describe assemblies aligned to the same reference. Reference identifiers and lengths must match the FASTA dictionary.
@@ -36,6 +38,9 @@ For an explicit experiment, pass `--preset-file presets/common-assembly-hq-v5.js
 | `-o`, `--output` | results.vcf | Main output path |
 | `-t`, `--threads` | 4 | Workers per haplotype |
 | `--min-sv` | 30 | Minimum variant-size setting, in bp |
+| --min-inv / --min-inv-size | follows --min-sv | Minimum standalone INV span; independent of INS/DEL and CPX inversion frames |
+| --max-indel-size | -1 | Inclusive INS/DEL reporting maximum; larger records retain type/sequence with OVERSIZE |
+| --max-ref-gap | 150,000 | Reference-gap bound for heuristic fallback; not a universal cap or TRA classification threshold |
 | `--min-mapq` | 10 | Minimum alignment MAPQ |
 | `--query-fasta1/2` | None | Indexed original assembly FASTAs |
 | `--sorted-bam1/2` | Automatic | Existing name-sorted BAMs |
@@ -144,3 +149,17 @@ python scripts/benchmark_genotypes.py calls.vcf.indels.vcf \
 ```
 
 The scripts require bcftools on PATH. Use fresh benchmark output directories and consistent reference/truth/region definitions. The benchmark extra pins Truvari to the evaluation-script version. Detection and genotype matching policies differ; inspect the saved commands before comparing metrics.
+
+
+## Complete insertion sequences and source links
+
+Current1.3.0 builds retain all available INS payloads in ALT and .sequences.fa with length/SHA256 links. Inspect .indels.vcf for reference changes and .junctions.vcf (enabled by --junction-vcf) for paired source/target topology. RELOCATION_ID identifies same-haplotype sequence-compatible DEL/INS links; inspect the corresponding RELOCATION record in .events.jsonl for source-search scope, original atoms and exact boundary-equivalence proof.
+
+Use --tandem-target-indels only when you need the separate .target_indels.vcf representation at declared tandem-copy targets. Default reference indels and this view describe equivalent alleles and must not be pooled. Declare the chosen view in a benchmark; a distance window can distinguish equivalent tandem boundaries. See [output semantics](OUTPUT_FORMAT.md).
+
+
+## Independent inversion and indel size policies
+
+Use --min-sv 50 --min-inv 30 to retain supported standalone inversions down to 30 bp while keeping the INS/DEL minimum at 50 bp. A lower reporting threshold does not create missing alignment evidence; the pure exact-gap model also needs its intrinsic 16-bp core and usable flanks.
+
+Known INS payloads remain complete literal ALT at every length, including OVERSIZE records. --max-indel-size 10000 marks INS/DEL records longer than 10,000 bp; it does not convert them to TRA. --max-ref-gap controls only heuristic fallback, so a directly observed CIGAR deletion or a certified pure deletion can be larger. Duplication --max-sv remains separate. INS/DEL projections of a DUP follow the indel report cap; the DUP parent and BND view have their own semantics and must not be summed as independent events.

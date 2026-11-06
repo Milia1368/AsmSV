@@ -6,7 +6,7 @@ from asmsv_next.sequence_check import reverse_complement
 
 def junction_candidates(bundle,aliases):
     name=bundle['query'];haplotype=bundle['haplotype'];records=[];seen={}
-    def emit(edge,context=None,parent=None,atom_id=None,partial=False,region=None):
+    def emit(edge,context=None,parent=None,atom_id=None,partial=False,region=None,relation=None):
         # Group complete adjacency pairs by exact geometry. Independent fuzzy
         # clustering of their two breakends can leave dangling MATEIDs.
         ports=sorted((edge['left'],edge['right']),key=lambda p:(p['chrom'],p['position'],p['side']))
@@ -34,6 +34,7 @@ def junction_candidates(bundle,aliases):
             if parent:info['PARENT_EVENT']=aliases.get(parent,parent)
             if atom_id:info['ATOM_ID']=atom_id
             if region:info['REGION_ID']=region
+            if relation:info['RELOCATION_ID']=relation
             if inserted:
                 outgoing=inserted if suffix=='a' else reverse_complement(inserted)
                 info['BND_INSERTION']=outgoing if local['side']=='R' else reverse_complement(outgoing)
@@ -43,11 +44,19 @@ def junction_candidates(bundle,aliases):
                 filter_str='PARTIAL' if partial else 'PASS')
             candidate.id=key+'.'+suffix;candidate.mateid=key+'.'+mate;records.append(candidate)
             seen[key].append(candidate)
+    represented=set()
+    for relation in bundle.get('relocations',[]):
+        for edge in relation['junctions']:
+            emit(edge,atom_id=relation['insertion_atom'],relation=relation['relation_id'])
+        represented.add(relation['insertion_atom'])
     for context in bundle['contexts']:
+        if set(context.get('source_join_atoms',[])) & represented:continue
         for edge in context.get('junctions',[]):
             emit(edge,context['context_id'],context.get('event_id'),partial=context['resolution']!='RESOLVED',region=context.get('region_id'))
+        if context.get('junctions') and context['resolution']=='RESOLVED':
+            represented.update(context.get('source_join_atoms',[]))
     for atom in bundle['atoms']:
-        if atom.get('parent_event') or atom['type'] not in ('INS','DEL','DELINS'):continue
+        if atom.get('parent_event') or atom['atom_id'] in represented or atom['type'] not in ('INS','DEL','DELINS'):continue
         parts=[p for p in atom['parts'] if p[0] in (1,2)]
         if not parts:
             qs,qe=atom['query'];rs=min(p[0] for p in atom['reference_consumption']);re=max(p[1] for p in atom['reference_consumption'])
