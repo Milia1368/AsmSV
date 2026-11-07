@@ -148,11 +148,9 @@ The example generates synthetic inputs with a 200 bp deletion and a 60 bp insert
 
 AsmSV reports structures supported by the input assemblies and alignments. Assembly gaps, repeats and incomplete alignments can leave structures partially resolved. CPX calls do not establish mutation chronology, and BND records do not necessarily represent complete translocations. Review genotype filters and partial-call annotations before downstream analysis.
 
-## Tests
+## Installation checks
 
-```bash
-python -B -m unittest discover -s tests -v
-```
+CI checks package installation, both command-line entry points and the synthetic calling example above. Development regression tests and evaluation scripts are maintained locally and are excluded from the public repository and source distributions.
 
 ## Citation
 

@@ -21,10 +21,10 @@
 
 ## 2. 先运行随附的小示例
 
-以下命令从包含 `pyproject.toml`、`scripts/` 和 `examples/` 的仓库根目录执行；使用 Python 3.10+。
+使用 Python 3.10+ 安装 AsmSV 后，从包含 `pyproject.toml` 和 `examples/` 的仓库根目录执行以下命令。
 
 ~~~bash
-python scripts/export_cpx.py \
+asmSV-cpx \
   --vcf examples/csv/data/calls.vcf \
   --scope csv --out-prefix /tmp/asmsv-csv-demo/calls.csv
 ~~~
@@ -32,7 +32,7 @@ python scripts/export_cpx.py \
 在浏览器打开 `/tmp/asmsv-csv-demo/calls.csv.html`；同时生成 JSONL 和 VERIX 端点视图。预期为 **5 个报告单元、4 个带可关联的结构证据**。独立 DELINS 的浏览图可标为 VCF_ONLY_LAYOUT；这说明该展示使用 VCF 字段，而非该位点不存在原始序列证据。
 
 ~~~bash
-python scripts/export_cpx.py \
+asmSV-cpx \
   --vcf examples/csv/data/calls.vcf \
   --scope cpx --out-prefix /tmp/asmsv-csv-demo/calls.cpx
 ~~~

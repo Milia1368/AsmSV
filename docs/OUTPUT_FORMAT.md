@@ -58,7 +58,7 @@ Run the independent postprocessor after calling:
 
 ```bash
 asmSV-cpx --vcf calls.vcf --scope csv --out-prefix calls.csv
-# From a source checkout: python scripts/export_cpx.py --vcf calls.vcf --out-prefix calls.csv
+# From a source checkout: PYTHONPATH=src python -m asmsv_next.cpx_export --vcf calls.vcf --out-prefix calls.csv
 # Reproduce the previous CPX-only population:
 asmSV-cpx --vcf calls.vcf --scope cpx --out-prefix calls.cpx
 ```

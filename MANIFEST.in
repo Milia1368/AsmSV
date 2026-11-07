@@ -5,9 +5,7 @@ recursive-include presets *.json
 recursive-include examples *.py
 recursive-include examples/csv *.md *.json *.jsonl *.vcf *.bed *.svg
 prune scripts
-include scripts/evaluate_benchmark.py scripts/benchmark_genotypes.py scripts/evaluate_genotypes.py
-include scripts/export_cpx.py
-recursive-include tests *.py *.json
+prune tests
 prune archive
 prune validation
 prune history

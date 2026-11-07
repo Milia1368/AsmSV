@@ -34,8 +34,8 @@ origin.json
 # Local research, release audits and experiment-specific helpers.
 /benchmarks/
 /release_manifest.json
-/scripts/audit_duplication_alleles.py
-/scripts/evaluate_csv_simulation.py
+/scripts/
+/tests/
 
 # Curated, fixed-size real-output examples (not generated whole-genome output).
 !/examples/csv/data/calls.vcf

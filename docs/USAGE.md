@@ -108,7 +108,7 @@ BAM compression speed also depends on how pysam was built. The startup log repor
 python -c 'import pysam, pysam.config; print(pysam.__version__, pysam.config.HAVE_LIBDEFLATE)'
 ```
 
-For a conda installation, install a libdeflate-enabled pysam before installing AsmSV. One validated version is 0.23.3; the version alone does not guarantee build features. Full environment creation and installation steps are in the [README](../README.md#conda-installation-recommended):
+For a conda installation, install a libdeflate-enabled pysam before installing AsmSV. One validated version is 0.23.3; the version alone does not guarantee build features. Full environment creation and installation steps are in the [README](../README.md#install-the-current-branch):
 
 ```bash
 conda install --override-channels -c defaults pysam=0.23.3 pip
@@ -139,16 +139,7 @@ The current output uses CPX and DELINS annotations and separate event/component/
 
 ## Optional evaluation
 
-```bash
-python -m pip install '.[benchmark]'
-python scripts/evaluate_benchmark.py calls.vcf.indels.vcf \
-  --ref reference.fa --truth truth.vcf.gz --bed benchmark.bed
-python scripts/benchmark_genotypes.py calls.vcf.indels.vcf \
-  --output genotype_benchmark \
-  --ref reference.fa --truth truth.vcf.gz --bed benchmark.bed
-```
-
-The scripts require bcftools on PATH. Use fresh benchmark output directories and consistent reference/truth/region definitions. The benchmark extra pins Truvari to the evaluation-script version. Detection and genotype matching policies differ; inspect the saved commands before comparing metrics.
+For reference INS/DEL comparisons, use the `.indels.vcf` projection with a declared reference, truth set, confident regions and matching protocol. The optional `benchmark` extra provides the pinned Truvari version; development evaluation wrappers are kept locally. Use fresh output directories and save the exact benchmark command. Allele matching, genotype concordance and structural-event recovery measure different aspects of a result.
 
 
 ## Complete insertion sequences and source links

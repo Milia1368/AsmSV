@@ -26,7 +26,7 @@ VCF 数据行未改写，文件头增加摘录说明。JSONL只保留关联对�
 Run from the repository root / 从仓库根目录运行：
 
 ~~~bash
-python scripts/export_cpx.py --vcf examples/csv/data/calls.vcf \
+asmSV-cpx --vcf examples/csv/data/calls.vcf \
   --scope csv --out-prefix /tmp/asmsv-csv-demo/calls.csv
 
 python examples/csv/inspect_csv.py --vcf examples/csv/data/calls.vcf \

@@ -21,10 +21,10 @@ Broad `--scope csv` includes CPX, native inverted/dispersed DUP and a separate D
 
 ## 2. Run the small supplied example
 
-Run from the repository root containing `pyproject.toml`, `scripts/` and `examples/`, using Python 3.10+.
+After installing AsmSV with Python 3.10+, run from the repository root containing `pyproject.toml` and `examples/`.
 
 ~~~bash
-python scripts/export_cpx.py \
+asmSV-cpx \
   --vcf examples/csv/data/calls.vcf \
   --scope csv --out-prefix /tmp/asmsv-csv-demo/calls.csv
 ~~~
@@ -32,7 +32,7 @@ python scripts/export_cpx.py \
 Open `/tmp/asmsv-csv-demo/calls.csv.html` in a browser. JSONL and a VERIX endpoint VCF are also produced. Expect **5 report units, 4 with linkable structural evidence**. The standalone DELINS diagram can carry VCF_ONLY_LAYOUT: its display uses VCF fields, which does not mean the original sequence evidence is absent.
 
 ~~~bash
-python scripts/export_cpx.py \
+asmSV-cpx \
   --vcf examples/csv/data/calls.vcf \
   --scope cpx --out-prefix /tmp/asmsv-csv-demo/calls.cpx
 ~~~
