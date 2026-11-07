@@ -1,6 +1,6 @@
 # AsmSV user guide
 
-This checkout describes local **1.4.0.dev0**. Published stable 1.3.0 has different calling behavior; retain the version, source hashes and input provenance when comparing runs. The run manifest records `software_version`, and VCF headers record `asmsvVersion`.
+The historical `release/asmsv-v1.3.0` branch now provides **1.4.0.dev0**. Earlier 1.3.0 builds have different calling behavior; retain the version, source hashes and input provenance when comparing runs. The run manifest records `software_version`, and VCF headers record `asmsvVersion`.
 
 ## Inputs
 

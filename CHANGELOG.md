@@ -1,8 +1,8 @@
 # Release changes
 
-## 1.4.0.dev0 — local development snapshot, 2026-11-07
+## 1.4.0.dev0 — development branch update, 2026-11-07
 
-This version is local and unreleased. Published stable 1.3.0 remains on release/asmsv-v1.3.0 at commit eb64bc2.
+The historical `release/asmsv-v1.3.0` branch now contains this development version. The previous 1.3.0 snapshot remains available at commit `eb64bc2`. The package and CLI report `1.4.0.dev0`; this branch update does not create a version tag or a GitHub Release.
 
 - Use complete EQX CIGAR directly; resolve M with synchronized MD/cs, and use NM only as an aggregate fallback.
 - Use a continuous, capped-gap evaluation length for AQ density while retaining DP rewards and the common coefficients.

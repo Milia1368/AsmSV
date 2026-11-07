@@ -17,7 +17,7 @@
 
 AsmSV detects structural variants from two haplotype-resolved genome assemblies aligned to the same reference. It takes one BAM per haplotype and writes VCF 4.2 records with genotype and structural annotations.
 
-This local checkout is **1.4.0.dev0**, an unreleased algorithm update with CIGAR-first evidence scoring, exact flanked inversion recovery, complete known insertion payloads and independent size-reporting policies. The published stable branch remains **1.3.0**. Both use one common AQ/DP scoring template across supported assembly aligners and retain incomplete-region evidence. BAM sorting caches remain reusable between runs. The package name remains **AsmSV**, and the command remains **`asmSV`**. See [release changes and compatibility](CHANGELOG.md).
+This branch provides **1.4.0.dev0**, a development version with CIGAR-first evidence scoring, exact flanked inversion recovery, complete known insertion payloads and independent size-reporting policies. Its historical branch name remains **`release/asmsv-v1.3.0`**; the previous 1.3.0 snapshot is commit `eb64bc2`. The caller uses one common AQ/DP scoring template across supported assembly aligners and retains incomplete-region evidence. BAM sorting caches remain reusable between runs. The package name remains **AsmSV**, and the command remains **`asmSV`**. See [release changes and compatibility](CHANGELOG.md).
 
 ### Features
 
@@ -31,14 +31,14 @@ This local checkout is **1.4.0.dev0**, an unreleased algorithm update with CIGAR
 
 Requirements: Python **3.10+**, `pysam>=0.19` and `edlib>=1.3.9`. Linux is the tested platform. A pysam build with **libdeflate** is recommended for fast BAM compression.
 
-### Stable 1.3.0 installation (recommended)
+### Install the current branch
 
 Create an environment with a libdeflate-enabled pysam before installing AsmSV. The following Linux setup uses the validated `defaults` build; pip installs edlib with AsmSV:
 
 ```bash
-conda create -y -n asmsv_v1.3.0 --override-channels \
+conda create -y -n asmsv_v1.4_dev --override-channels \
   -c defaults python=3.10 pysam=0.23.3 pip
-conda activate asmsv_v1.3.0
+conda activate asmsv_v1.4_dev
 git clone --branch release/asmsv-v1.3.0 https://github.com/Milia1368/AsmSV.git
 cd AsmSV
 python -m pip install .
@@ -47,7 +47,7 @@ asmSV --version
 asmSV --help
 ```
 
-The dependency check should report `libdeflate 1` and `asmSV --version` should report `AsmSV 1.3.0`. The startup log also reports libdeflate availability. Builds without it can sort large BAMs substantially more slowly.
+The dependency check should report `libdeflate 1` and `asmSV --version` should report `AsmSV 1.4.0.dev0`. The startup log also reports libdeflate availability. Builds without it can sort large BAMs substantially more slowly.
 
 ### Python virtual environment
 
@@ -62,11 +62,11 @@ asmSV --help
 
 Python dependencies are installed automatically; compression performance depends on the pysam build. See [temporary storage and installation checks](docs/USAGE.md#memory-and-temporary-files).
 
-For the local development checkout, install from this directory and verify that asmSV --version reports 1.4.0.dev0. The GitHub commands above intentionally select stable 1.3.0. For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
+The GitHub commands above select the historical release branch, now containing 1.4.0.dev0. For an editable installation, use `python -m pip install -e .`. The source-checkout launcher is `bash run.sh ...`.
 
 ### Update an existing installation
 
-In a checkout with its runtime dependencies already installed, select the 1.3.0 release branch and reinstall the local source while retaining the conda dependency builds. Commit or otherwise preserve any local edits before switching branches:
+In a checkout with its runtime dependencies already installed, select the release branch and reinstall the local source while retaining the conda dependency builds. Commit or otherwise preserve any local edits before switching branches:
 
 ```bash
 git fetch origin
@@ -77,7 +77,7 @@ asmSV --version
 git rev-parse HEAD
 ```
 
-Record the Git commit as well as the version when reproducing results. This maintenance branch retains the 1.3.0 version number; use the Git commit and saved scoring configuration to distinguish updates. Scoring defaults changed for some upstream sources; see [compatibility notes](CHANGELOG.md) before comparing with earlier builds.
+Record the Git commit as well as the version when reproducing results. The branch name retains 1.3.0 for continuity, while the package and CLI report 1.4.0.dev0. Use the Git commit and saved scoring configuration to distinguish updates; see [compatibility notes](CHANGELOG.md) before comparing with earlier builds.
 
 
 ## Quick start
